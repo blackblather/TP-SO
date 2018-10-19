@@ -1,1 +1,2 @@
 #define SOMETHING 10
+#define SOMETHING_ELSE 20
