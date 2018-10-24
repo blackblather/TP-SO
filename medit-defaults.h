@@ -1,2 +1,2 @@
-
-#define XPTO 10
+//Constantes comuns ao servidor e ao cliente
+#define MEDIT_USERNAME_MAXLENGHT 8
