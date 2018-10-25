@@ -2,7 +2,7 @@
 #include <string.h>	//Used for strcmp() and strtok()
 #include <errno.h>	//Used for error handling in strtol()
 #include <stdlib.h>	//Used for strtol()
-#include <unistd.h>	//Used for access()
+#include <unistd.h>	//Used for access() and getopt()
 #include "server-defaults.h"
 #include "../medit-defaults.h"
 void FlushStdin(){
@@ -52,14 +52,41 @@ void FreeLine(char* nrStr, int maxLines){
     	printf("Invalid line.\n");
 }
 
-void Settings(int maxLines, int maxColumns){
+void Settings(int maxLines, int maxColumns, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes, char* mainNamedPipeName){
 	printf("Max lines: %d\n", maxLines);
 	printf("Max columns: %d\n", maxColumns);
+	printf("Database filename: %s\n", dbFilename);
+	printf("Max users: %d\n", maxUsers);
+	printf("Number of interaction named pipes: %d\n", nrOfInteractionNamedPipes);
+	printf("Main named pipe name: %s\n", mainNamedPipeName);
 }
 
-void ProcessCommand(char* cmd, int* shutdown){
-	char *cmdPart1, *cmdPart2;
-	int maxLines = MEDIT_MAXLINES, maxColumns = MEDIT_MAXCOLUMNS;
+int UserExists(char *filename, char *username){
+	if(FileExists(filename)){
+		FILE *fp;
+		char tmpUser[9];
+
+		fp = fopen(filename, "r");
+		if (fp != NULL){
+			while(fgets(tmpUser, 8, fp) != NULL)
+				if(strcmp(tmpUser, username)==0) {
+					fclose(fp);
+					return 1;
+				}
+			fclose(fp);
+		}
+	}
+	return 0;
+}
+
+void ProcessCommand(char* cmd, int* shutdown, int maxLines, int maxColumns){
+	char *cmdPart1, *cmdPart2,
+		 *dbFilename = MEDIT_DB_NAME,
+		 *mainNamedPipeName = MEDIT_MAIN_NAMED_PIPE_NAME;
+
+	int maxUsers = MEDIT_MAXUSERS,
+		nrOfInteractionNamedPipes = MEDIT_NR_OF_INTERACTION_NAMED_PIPES;
+
 	if((cmdPart1 = strtok(cmd, " ")) != NULL){
 		if(strcmp(cmdPart1, "load")==0 || strcmp(cmdPart1, "save")==0 || strcmp(cmdPart1, "free")==0){
 			if((cmdPart2 = strtok(NULL, " ")) != NULL){
@@ -71,7 +98,13 @@ void ProcessCommand(char* cmd, int* shutdown){
 				printf("Missing second parameter.\n");
 		}
 		else{
-			if(strcmp(cmdPart1, "settings")==0) Settings(maxLines, maxColumns);
+			if(strcmp(cmdPart1, "settings")==0) Settings(maxLines, maxColumns, dbFilename, maxUsers, nrOfInteractionNamedPipes, mainNamedPipeName);
+			else if(strcmp(cmdPart1, "userExists")==0) {
+				if(UserExists("medit.db", "user1"))
+					printf("Encontrou o utilizador\n");
+				else
+					printf("Não encontrou o utilizador\n");
+			}
 			else if(strcmp(cmdPart1, "statistics")==0){}
 			else if(strcmp(cmdPart1, "users")==0){}
 			else if(strcmp(cmdPart1, "text")==0){}
@@ -82,18 +115,75 @@ void ProcessCommand(char* cmd, int* shutdown){
 	}
 }
 
-int main(int argc, char const *argv[])
-{
+void AllocScreenMemory(Screen *screen, int maxLines, int maxColumns){
+	(*screen).line = (Line*) malloc(maxLines*sizeof(Line));
+	for(int i = 0; i < maxLines; i++){
+		(*screen).line[i].column = (char*) malloc(maxColumns*sizeof(char));
+		(*screen).line[i].username = NULL;	//Limpa o lixo que vem por default quando se cria um ponteiro.
+	}
+}
+
+void InitFromOpts(){
+	//Source: https://www.gnu.org/software/libc/manual/html_node/Getopt.html
+	 /*while ((c = getopt (argc, argv, "abc:")) != -1)
+	    switch (c){
+	      case 'a':
+	        aflag = 1;
+	        break;
+	      case 'b':
+	        bflag = 1;
+	        break;
+	      case 'c':
+	        cvalue = optarg;
+	        break;
+	      case '?':
+	        if (optopt == 'c')
+	          fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+	        else if (isprint (optopt))
+	          fprintf (stderr, "Unknown option `-%c'.\n", optopt);
+	        else
+	          fprintf (stderr,
+	                   "Unknown option character `\\x%x'.\n",
+	                   optopt);
+	        return 1;
+	      default:
+	        abort ();
+	    }
+	*/
+}
+
+void InitFromEnvs(Screen *screen, int *maxLines, int *maxColumns){
+	//Le var de ambiente aqui
+	AllocScreenMemory(screen, (*maxLines), (*maxColumns));
+}
+
+void FreeAllocatedMemory(Screen *screen, Line *OccupiedLine, int maxLines, int maxColumns){
+	for(int i = 0; i < maxLines; i++)
+		free((*screen).line[i].column);
+	free((*screen).line);
+	free(OccupiedLine);
+}
+
+int main(int argc, char const *argv[]){
 	//scanf(" %14[^ \n]%*[^ \n]%*[ \n]%255[^\n]",cmdPart1, cmdPart2);
 	//printf("CMD1->%s\nCMD2->%s\n", cmdPart1, cmdPart2);
+	
 	char cmd[300] = {'\0'};
+	int maxLines = MEDIT_MAXLINES,
+		maxColumns = MEDIT_MAXCOLUMNS;
+	Screen screen;		//Exemplo de utilização: screen.line[0].column[0] = 'F';
+	Line *OccupiedLine;	//Linha(s) em edição
+
+	InitFromOpts();
+	InitFromEnvs(&screen, &maxLines, &maxColumns);
 	int shutdown = 0;
 	do{
 		printf("Command: ");
 		scanf(" %299[^\n]", cmd);
 		FlushStdin();
-		ProcessCommand(cmd, &shutdown);
+		ProcessCommand(cmd, &shutdown, maxLines, maxColumns);
 	}while(shutdown == 0);
 	//DO SHUTDOWN LOGIC HERE
+	FreeAllocatedMemory(&screen, OccupiedLine, maxLines, maxColumns);
 	return 0;
 }
