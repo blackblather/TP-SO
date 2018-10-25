@@ -18,6 +18,7 @@ int FileExists(char* filename){
 	return 0;
 }
 
+//TODO: Actually load file (só valida os parametros)
 void LoadFile(char* filename){
 	if(!FileExists(filename))
 		printf("File not found.\n");
@@ -25,6 +26,7 @@ void LoadFile(char* filename){
 		printf("Loaded file: %s\n", filename);
 }
 
+//TODO: Actually save file (só valida os parametros)
 void SaveFile(char* filename){
 	char replace = 'y';
 	if(FileExists(filename)){
@@ -37,6 +39,7 @@ void SaveFile(char* filename){
 		printf("Invalid command.\n");
 }
 
+//TOD: Acutally free line (só valida os parametros)
 void FreeLine(char* nrStr, int maxLines){
 	//Source: https://en.cppreference.com/w/c/string/byte/strtol
 	//Helper source: https://stackoverflow.com/questions/11279767/how-do-i-make-sure-that-strtol-have-returned-successfully
@@ -79,9 +82,8 @@ int UserExists(char *filename, char *username){
 	return 0;
 }
 
-void ProcessCommand(char* cmd, int* shutdown, int maxLines, int maxColumns){
+void ProcessCommand(char* cmd, int* shutdown, int maxLines, int maxColumns, char* dbFilename){
 	char *cmdPart1, *cmdPart2,
-		 *dbFilename = MEDIT_DB_NAME,
 		 *mainNamedPipeName = MEDIT_MAIN_NAMED_PIPE_NAME;
 
 	int maxUsers = MEDIT_MAXUSERS,
@@ -123,33 +125,30 @@ void AllocScreenMemory(Screen *screen, int maxLines, int maxColumns){
 	}
 }
 
-void InitFromOpts(){
+void InitFromOpts(int argc, char* const argv[], char *dbFilename){
 	//Source: https://www.gnu.org/software/libc/manual/html_node/Getopt.html
-	 /*while ((c = getopt (argc, argv, "abc:")) != -1)
+	int c;
+	while ((c = getopt (argc, argv, "f:p:n:")) != -1){
 	    switch (c){
-	      case 'a':
-	        aflag = 1;
+	      case 'f': break;
+	      case 'p':
+	        //cvalue = optarg;
 	        break;
-	      case 'b':
-	        bflag = 1;
-	        break;
-	      case 'c':
-	        cvalue = optarg;
-	        break;
+	      case 'n': break;
 	      case '?':
-	        if (optopt == 'c')
+	        /*if (optopt == 'c')
 	          fprintf (stderr, "Option -%c requires an argument.\n", optopt);
 	        else if (isprint (optopt))
 	          fprintf (stderr, "Unknown option `-%c'.\n", optopt);
 	        else
 	          fprintf (stderr,
 	                   "Unknown option character `\\x%x'.\n",
-	                   optopt);
-	        return 1;
+	                   optopt);*/
+	        break;
 	      default:
 	        abort ();
 	    }
-	*/
+	}
 }
 
 void InitFromEnvs(Screen *screen, int *maxLines, int *maxColumns){
@@ -157,33 +156,34 @@ void InitFromEnvs(Screen *screen, int *maxLines, int *maxColumns){
 	AllocScreenMemory(screen, (*maxLines), (*maxColumns));
 }
 
-void FreeAllocatedMemory(Screen *screen, Line *OccupiedLine, int maxLines, int maxColumns){
+void FreeAllocatedMemory(Screen *screen, int maxLines, int maxColumns){
 	for(int i = 0; i < maxLines; i++)
 		free((*screen).line[i].column);
 	free((*screen).line);
-	free(OccupiedLine);
+	//free(OccupiedLine);
 }
 
-int main(int argc, char const *argv[]){
+int main(int argc, char* const argv[]){
 	//scanf(" %14[^ \n]%*[^ \n]%*[ \n]%255[^\n]",cmdPart1, cmdPart2);
 	//printf("CMD1->%s\nCMD2->%s\n", cmdPart1, cmdPart2);
 	
-	char cmd[300] = {'\0'};
+	char cmd[300] = {'\0'},
+		 *dbFilename = MEDIT_DB_NAME;
 	int maxLines = MEDIT_MAXLINES,
 		maxColumns = MEDIT_MAXCOLUMNS;
 	Screen screen;		//Exemplo de utilização: screen.line[0].column[0] = 'F';
 	Line *OccupiedLine;	//Linha(s) em edição
 
-	InitFromOpts();
+	InitFromOpts(argc, argv, dbFilename);
 	InitFromEnvs(&screen, &maxLines, &maxColumns);
 	int shutdown = 0;
 	do{
 		printf("Command: ");
 		scanf(" %299[^\n]", cmd);
 		FlushStdin();
-		ProcessCommand(cmd, &shutdown, maxLines, maxColumns);
+		ProcessCommand(cmd, &shutdown, maxLines, maxColumns, dbFilename);
 	}while(shutdown == 0);
 	//DO SHUTDOWN LOGIC HERE
-	FreeAllocatedMemory(&screen, OccupiedLine, maxLines, maxColumns);
+	FreeAllocatedMemory(&screen, maxLines, maxColumns);
 	return 0;
 }
