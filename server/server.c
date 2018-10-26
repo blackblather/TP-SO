@@ -3,7 +3,6 @@
 #include <errno.h>	//Used for error handling in strtol()
 #include <stdlib.h>	//Used for strtol()
 #include <unistd.h>	//Used for access() and getopt()
-#include "../medit-defaults.h"
 #include "server-defaults.h"
 void FlushStdin(){
 	//Source: https://stackoverflow.com/questions/2187474/i-am-not-able-to-flush-stdin
@@ -16,6 +15,16 @@ int FileExists(char* filename){
 	if(access( filename, F_OK ) != -1)
 		return 1;
 	return 0;
+}
+
+int StrToPositiveInt(char* nrStr){
+	char* end;
+	int nr = (int)strtol(nrStr, &end, 10);
+	if (errno == ERANGE || end == nrStr){
+		nr = -1;
+        errno = 0;
+    }
+    return nr;
 }
 
 //TODO: Actually load file (só valida os parametros)
@@ -43,23 +52,19 @@ void SaveFile(char* filename){
 void FreeLine(char* nrStr, int maxLines){
 	//Source: https://en.cppreference.com/w/c/string/byte/strtol
 	//Helper source: https://stackoverflow.com/questions/11279767/how-do-i-make-sure-that-strtol-have-returned-successfully
-	char* end;
-	int lineNumber = (int)strtol(nrStr, &end, 10);
-	if (errno == ERANGE || end == nrStr){
-		lineNumber = -1;
-        errno = 0;
-    }
+	int lineNumber = StrToPositiveInt(nrStr);
     if((lineNumber >= 0) && (lineNumber <= maxLines))
     	printf("Line %d freed.\n", lineNumber);
     else
     	printf("Invalid line.\n");
 }
 
-void PrintSettings(int maxLines, int maxColumns, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes, char* mainNamedPipeName){
+void PrintSettings(int maxLines, int maxColumns, char* dbFilename, int maxUsers, int timeout, int nrOfInteractionNamedPipes, char* mainNamedPipeName){
 	printf("Max lines: %d\n", maxLines);
 	printf("Max columns: %d\n", maxColumns);
 	printf("Database filename: %s\n", dbFilename);
 	printf("Max users: %d\n", maxUsers);
+	printf("Timeout (seconds): %d\n", timeout);
 	printf("Number of interaction named pipes: %d\n", nrOfInteractionNamedPipes);
 	printf("Main named pipe name: %s\n", mainNamedPipeName);
 }
@@ -96,7 +101,7 @@ void ProcessCommand(char* cmd, int* shutdown, CommonSettings commonSettings, Ser
 				printf("Missing second parameter.\n");
 		}
 		else{
-			if(strcmp(cmdPart1, "settings")==0) PrintSettings(commonSettings.maxLines, commonSettings.maxColumns, serverSettings.dbFilename, serverSettings.maxUsers, serverSettings.nrOfInteractionNamedPipes, commonSettings.mainNamedPipeName);
+			if(strcmp(cmdPart1, "settings")==0) PrintSettings(commonSettings.maxLines, commonSettings.maxColumns, serverSettings.dbFilename, serverSettings.maxUsers, serverSettings.timeout, serverSettings.nrOfInteractionNamedPipes, commonSettings.mainNamedPipeName);
 			else if(strcmp(cmdPart1, "userExists")==0) {
 				if(UserExists("medit.db", "user1"))
 					printf("Encontrou o utilizador\n");
@@ -113,10 +118,10 @@ void ProcessCommand(char* cmd, int* shutdown, CommonSettings commonSettings, Ser
 	}
 }
 
-void AllocScreenMemory(Screen *screen, int maxLines, int maxColumns){
-	(*screen).line = (Line*) malloc(maxLines*sizeof(Line));
-	for(int i = 0; i < maxLines; i++){
-		(*screen).line[i].column = (char*) malloc(maxColumns*sizeof(char));
+void AllocScreenMemory(Screen *screen, CommonSettings commonSettings){
+	(*screen).line = (Line*) malloc(commonSettings.maxLines*sizeof(Line));
+	for(int i = 0; i < commonSettings.maxLines; i++){
+		(*screen).line[i].column = (char*) malloc(commonSettings.maxColumns*sizeof(char));
 		(*screen).line[i].username = NULL;	//Limpa o lixo que vem por default quando se cria um ponteiro.
 	}
 }
@@ -130,21 +135,20 @@ void UpdateMainNamedPipeName(char **oldMainNamedPipeName, char *newdMainNamedPip
 	(*oldMainNamedPipeName) = newdMainNamedPipeName;
 }
 
-void UpdateNumberOfInteractiveNamedPipes(int* oldNrOfInteractionNamedPipes, char *newNrOfInteractionNamedPipesSTR){
-	char* end;
-	int nrOfInteractionNamedPipesTMP = (int)strtol(newNrOfInteractionNamedPipesSTR, &end, 10);
-	if (errno == ERANGE || end == newNrOfInteractionNamedPipesSTR){
-		nrOfInteractionNamedPipesTMP = -1;
-        errno = 0;
-    }
-    if(nrOfInteractionNamedPipesTMP > 0)
-    	(*oldNrOfInteractionNamedPipes) = nrOfInteractionNamedPipesTMP;
+void UpdateNumberThatCanOnlyBePositive(int *oldNr, char *newNrStr){
+	int newNrTmp = StrToPositiveInt(newNrStr);
+	if(newNrTmp > 0)
+		(*oldNr) = newNrTmp;
+}
+
+void UpdateNumberOfInteractiveNamedPipes(int *oldNrOfInteractionNamedPipes, char *newNrOfInteractionNamedPipesSTR){
+	UpdateNumberThatCanOnlyBePositive(oldNrOfInteractionNamedPipes, newNrOfInteractionNamedPipesSTR);
 }
 
 void InitFromOpts(int argc, char* const argv[], char **dbFilename, char **mainNamedPipeName, int* nrOfInteractionNamedPipes){
 	//Source: https://www.gnu.org/software/libc/manual/html_node/Getopt.html
 	int c;
-	while ((c = getopt (argc, argv, "f:p:n:")) != -1){
+	while ((c = getopt(argc, argv, "f:p:n:")) != -1){
 	    switch (c){
 	      case 'f': UpdateDbFilename(dbFilename, optarg); break;
 	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
@@ -153,13 +157,32 @@ void InitFromOpts(int argc, char* const argv[], char **dbFilename, char **mainNa
 	}
 }
 
-void InitFromEnvs(Screen *screen, int *maxLines, int *maxColumns){
-	//Le var de ambiente aqui
-	AllocScreenMemory(screen, (*maxLines), (*maxColumns));
+void UpdateMaxLines(int *oldMaxLines, char* newMaxLinesStr){
+	UpdateNumberThatCanOnlyBePositive(oldMaxLines, newMaxLinesStr);
 }
 
-void FreeAllocatedMemory(Screen *screen, int maxLines, int maxColumns){
-	for(int i = 0; i < maxLines; i++)
+void UpdateMaxColumns(int *oldMaxColumns, char* newMaxColumnsStr){
+	UpdateNumberThatCanOnlyBePositive(oldMaxColumns, newMaxColumnsStr);
+}
+
+void UpdateMaxUsers(int *oldMaxUsers, char* newMaxUsersStr){
+	UpdateNumberThatCanOnlyBePositive(oldMaxUsers, newMaxUsersStr);
+}
+
+void UpdateTimeout(int *oldTimeout, char* newTimeoutStr){
+	UpdateNumberThatCanOnlyBePositive(oldTimeout, newTimeoutStr);
+}
+
+void InitFromEnvs(int* maxLines, int* maxColumns, int* maxUsers, int* timeout){
+	char* envVal;
+	if((envVal = getenv("MEDIT_MAXLINES")) != NULL) UpdateMaxLines(maxLines, envVal);
+	if((envVal = getenv("MEDIT_MAXCOLUMNS")) != NULL) UpdateMaxColumns(maxColumns, envVal);
+	if((envVal = getenv("MEDIT_MAXUSERS")) != NULL) UpdateMaxUsers(maxUsers, envVal);
+	if((envVal = getenv("MEDIT_TIMEOUT")) != NULL) UpdateTimeout(timeout, envVal);
+}
+
+void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
+	for(int i = 0; i < commonSettings.maxLines; i++)
 		free((*screen).line[i].column);
 	free((*screen).line);
 }
@@ -183,17 +206,25 @@ void InitSettingsStructs(CommonSettings* commonSettings, ServerSettings* serverS
 }
 
 int main(int argc, char* const argv[]){
+	/* 
+	 * Algumas funções tê muitos parametros, para evitar enviar o '&' de uma struct,
+	 * quando esta nao precisa de aceder a todos os itens da struct. Mesmo sendo sendo eu
+	 * quem fez a função, perfiro que a função nao tenha acesso a esses dados
+	 */
+
 	char cmd[300] = {'\0'};
 	int shutdown = 0;
 
 	CommonSettings commonSettings;
 	ServerSettings serverSettings;
 	Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
-	Line *occupiedLine;				//Linha(s) em edição	(UNUSED AT THE MOMENT)
+	Line *occupiedLine;				//Linha(s) em edição	(UNUSED IETA 1)
 
 	InitSettingsStructs(&commonSettings, &serverSettings);
 	InitFromOpts(argc, argv, &serverSettings.dbFilename, &commonSettings.mainNamedPipeName, &serverSettings.nrOfInteractionNamedPipes);
-	InitFromEnvs(&screen, &commonSettings.maxLines, &commonSettings.maxColumns);
+	InitFromEnvs(&commonSettings.maxLines, &commonSettings.maxColumns, &serverSettings.maxUsers ,&serverSettings.timeout);
+	
+	AllocScreenMemory(&screen, commonSettings);
 
 	do{
 		printf("Command: ");
@@ -203,6 +234,6 @@ int main(int argc, char* const argv[]){
 	}while(shutdown == 0);
 
 	//DO SHUTDOWN LOGIC HERE
-	FreeAllocatedMemory(&screen, commonSettings.maxLines, commonSettings.maxColumns);
+	FreeAllocatedMemory(&screen, commonSettings);
 	return 0;
 }
