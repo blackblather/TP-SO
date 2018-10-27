@@ -39,7 +39,7 @@ void LoadFile(char* filename){
 void SaveFile(char* filename){
 	char replace = 'y';
 	if(FileExists(filename)){
-		printf("File %s already exists. Do you want to replace it? [Y/n] ", filename);
+		printf("File %s already exists. Do you want to replace it? [y/n] ", filename);
 		scanf("%c", &replace);
 	}
 	if(replace == 'y' || replace == 'Y')
@@ -53,7 +53,7 @@ void FreeLine(char* nrStr, int maxLines){
 	//Source: https://en.cppreference.com/w/c/string/byte/strtol
 	//Helper source: https://stackoverflow.com/questions/11279767/how-do-i-make-sure-that-strtol-have-returned-successfully
 	int lineNumber = StrToPositiveInt(nrStr);
-    if((lineNumber >= 0) && (lineNumber <= maxLines))
+    if((lineNumber >= 0) && (lineNumber <= maxLines-1))
     	printf("Line %d freed.\n", lineNumber);
     else
     	printf("Invalid line.\n");
@@ -121,6 +121,7 @@ void ProcessCommand(char* cmd, int* shutdown, CommonSettings commonSettings, Ser
 void AllocScreenMemory(Screen *screen, CommonSettings commonSettings){
 	(*screen).line = (Line*) malloc(commonSettings.maxLines*sizeof(Line));
 	for(int i = 0; i < commonSettings.maxLines; i++){
+		(*screen).line[i].lineNumber = i;
 		(*screen).line[i].column = (char*) malloc(commonSettings.maxColumns*sizeof(char));
 		(*screen).line[i].username = NULL;	//Limpa o lixo que vem por default quando se cria um ponteiro.
 	}
@@ -145,18 +146,6 @@ void UpdateNumberOfInteractiveNamedPipes(int *oldNrOfInteractionNamedPipes, char
 	UpdateNumberThatCanOnlyBePositive(oldNrOfInteractionNamedPipes, newNrOfInteractionNamedPipesSTR);
 }
 
-void InitFromOpts(int argc, char* const argv[], char **dbFilename, char **mainNamedPipeName, int* nrOfInteractionNamedPipes){
-	//Source: https://www.gnu.org/software/libc/manual/html_node/Getopt.html
-	int c;
-	while ((c = getopt(argc, argv, "f:p:n:")) != -1){
-	    switch (c){
-	      case 'f': UpdateDbFilename(dbFilename, optarg); break;
-	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
-	      case 'n': UpdateNumberOfInteractiveNamedPipes(nrOfInteractionNamedPipes, optarg); break;
-	    }
-	}
-}
-
 void UpdateMaxLines(int *oldMaxLines, char* newMaxLinesStr){
 	UpdateNumberThatCanOnlyBePositive(oldMaxLines, newMaxLinesStr);
 }
@@ -173,18 +162,24 @@ void UpdateTimeout(int *oldTimeout, char* newTimeoutStr){
 	UpdateNumberThatCanOnlyBePositive(oldTimeout, newTimeoutStr);
 }
 
+void InitFromOpts(int argc, char* const argv[], char **dbFilename, char **mainNamedPipeName, int* nrOfInteractionNamedPipes){
+	//Source: https://www.gnu.org/software/libc/manual/html_node/Getopt.html
+	int c;
+	while ((c = getopt(argc, argv, "f:p:n:")) != -1){
+	    switch (c){
+	      case 'f': UpdateDbFilename(dbFilename, optarg); break;
+	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
+	      case 'n': UpdateNumberOfInteractiveNamedPipes(nrOfInteractionNamedPipes, optarg); break;
+	    }
+	}
+}
+
 void InitFromEnvs(int* maxLines, int* maxColumns, int* maxUsers, int* timeout){
 	char* envVal;
 	if((envVal = getenv("MEDIT_MAXLINES")) != NULL) UpdateMaxLines(maxLines, envVal);
 	if((envVal = getenv("MEDIT_MAXCOLUMNS")) != NULL) UpdateMaxColumns(maxColumns, envVal);
 	if((envVal = getenv("MEDIT_MAXUSERS")) != NULL) UpdateMaxUsers(maxUsers, envVal);
 	if((envVal = getenv("MEDIT_TIMEOUT")) != NULL) UpdateTimeout(timeout, envVal);
-}
-
-void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
-	for(int i = 0; i < commonSettings.maxLines; i++)
-		free((*screen).line[i].column);
-	free((*screen).line);
 }
 
 void InitCommonSettingsStruct(CommonSettings* commonSettings){
@@ -205,6 +200,12 @@ void InitSettingsStructs(CommonSettings* commonSettings, ServerSettings* serverS
 	InitServerSettingsStruct(serverSettings);
 }
 
+void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
+	for(int i = 0; i < commonSettings.maxLines; i++)
+		free((*screen).line[i].column);
+	free((*screen).line);
+}
+
 int main(int argc, char* const argv[]){
 	/* 
 	 * Algumas funções tê muitos parametros, para evitar enviar o '&' de uma struct,
@@ -218,7 +219,7 @@ int main(int argc, char* const argv[]){
 	CommonSettings commonSettings;
 	ServerSettings serverSettings;
 	Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
-	Line *occupiedLine;				//Linha(s) em edição	(UNUSED IETA 1)
+	Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
 
 	InitSettingsStructs(&commonSettings, &serverSettings);
 	InitFromOpts(argc, argv, &serverSettings.dbFilename, &commonSettings.mainNamedPipeName, &serverSettings.nrOfInteractionNamedPipes);
