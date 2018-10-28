@@ -6,7 +6,7 @@
 //Defines usados para inicalizar CommonSettingsStruct
 #define MEDIT_MAXLINES 15							//Apenas usar se a envVar nao estiver definida (same name)
 #define MEDIT_MAXCOLUMNS 45							//Apenas usar se a envVar nao estiver definida (same name)
-#define MEDIT_MAIN_NAMED_PIPE_NAME "mainNamedPipe"	//Nome do named pipe pricipal
+
 
 typedef struct LineStruct{
 	int lineNumber;		//Used to know current line (occupiedLine)
