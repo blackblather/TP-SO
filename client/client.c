@@ -13,6 +13,12 @@ int IsValidChar(int ch){
 	return 0;
 }
 
+int IsEmptyOrSpaceChar(int ch){
+	if(ch == 32 || ch == 0)
+		return 1;
+	return 0;
+}
+
 int IsValidUsername(char *username){
 	int usernameLenght = strlen(username);
 	if(usernameLenght > 0 && usernameLenght <= 8)
@@ -66,6 +72,7 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 	//Source #4: https://invisible-island.net/ncurses/man/curs_getch.3x.html#h3-Keypad-mode
 	//Source #5: https://stackoverflow.com/questions/48274895/how-can-i-know-that-the-user-hit-the-esc-key-in-a-console-with-ncurses-linux?rq=1
 	//Source #6: http://invisible-island.net/ncurses/man/curs_getch.3x.html#h2-NOTES
+	//Source #7: http://pubs.opengroup.org/onlinepubs/7990989775/xcurses/inch.html
 	/* 
 	 * NOTAS:
 	 * Nota #1: 27 é o valor decimal da tabela ASCII correspondente à tecla 'Escape'.
@@ -79,18 +86,21 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 	 * Nota #3: KEY_ENTER é o enter do 'num pad', 10 é o código ascii da
 	 * tecla 'Enter' do teclado. (VER: 'Source 6')
 	 *
-	 * Nota #4: No código desta função, não dou uso à função notimeout(...),
+	 * Nota #4: Para ir buscar o caractere numa posição (y,x), uso a função mvinch(...)
+	 * (VER: 'Source #7')
+	 *
+	 * Nota #5: No código desta função, não dou uso à função notimeout(...),
 	 * pelo que o delay referido ocorre antes do ciclo terminar. No entanto,
 	 * o delay não ocorre caso se insira uma Input Escape Sequence, que retorna como
-	 * primeiro carácter, o carácter cujo código ASCII é 27 (correspondente também
+	 * primeiro caractere, o caractere cujo código ASCII é 27 (correspondente também
 	 * à tecla 'Escape' (VER: 'Nota #1')).
 	 *
-	 * Nota #5: A leitura da tecla 'Escape' é desencorajada, mas utilizada nesta aplicação,
+	 * Nota #6: A leitura da tecla 'Escape' é desencorajada, mas utilizada nesta aplicação,
 	 * para estar em conformidade com o enunciado do trabalho prático. (VER: 'Source #6')
 	 */
 
 	int posX = offset;
-	int ch;
+	int ch, lastLineChar;
 	maxColumns = maxColumns+offset;
 
 	cbreak();
@@ -114,13 +124,24 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 			}break;
 			case KEY_BACKSPACE:{
 				if((posX-1)>=offset){
+					int auxCh, auxCh2;
 					posX--;
 					mvprintw(posY, posX, "%c", ' ');
 				}
 			}break;
 			default:{
-				if(IsValidChar(ch) && (posX+1)<=maxColumns){
+				lastLineChar = (int) mvinch(posY, maxColumns-1);
+				mvprintw(7,7,"%d",lastLineChar);
+				if(IsValidChar(ch) && ((posX+1) <= maxColumns) &&
+			       IsValidChar(lastLineChar) && IsEmptyOrSpaceChar(lastLineChar)){
+					int auxCh, auxCh2;
+					auxCh = mvinch(posY, posX);
 					mvprintw(posY, posX, "%c", ch);
+					for(int i = posX+1; i < maxColumns; i++){
+						auxCh2 = mvinch(posY, i); 
+						mvprintw(posY, i, "%c", auxCh);
+						auxCh = auxCh2;
+					}
 					posX++;
 				}
 			}break;
