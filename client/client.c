@@ -39,12 +39,17 @@ void AskUsernameIfEmpty(char *username){
 	}
 }
 
-void InitFromOpts(int argc, char* const argv[], char *username){
+void UpdateMainNamedPipeName(char **oldMainNamedPipeName, char *newdMainNamedPipeName){
+	(*oldMainNamedPipeName) = newdMainNamedPipeName;
+}
+
+void InitFromOpts(int argc, char* const argv[], char *username, char **mainNamedPipeName){
 	//Source: https://www.gnu.org/software/libc/manual/html_node/Getopt.html
 	int c;
-	while ((c = getopt(argc, argv, "u:")) != -1){
+	while ((c = getopt(argc, argv, "u:p:")) != -1){
 	    switch (c){
 	      case 'u': UpdateUsername(username, optarg); break;
+	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
 	    }
 	}
 }
@@ -131,17 +136,25 @@ void InitTextEditor(char *username, CommonSettings commonSettings){
 	EnterLineEditMode(0, commonSettings.maxColumns, 3);
 }
 
+void InitCommonSettingsStruct(CommonSettings* commonSettings){
+	//As vars maxLines e maxColumns serão preenchidas com a informação do servidor,
+	//enviada por namepipe. (numa meta futura)
+	(*commonSettings).maxLines = 15;
+	(*commonSettings).maxColumns = 45;
+
+	(*commonSettings).mainNamedPipeName = MEDIT_MAIN_NAMED_PIPE_NAME;
+}
+
 int main(int argc, char* const argv[]){
-	//A struct será preenchida com a informação do servidor, enviada por namepipe. (numa meta futura)
 	CommonSettings commonSettings;
-	commonSettings.maxLines = 15;
-	commonSettings.maxColumns = 45;
+	InitCommonSettingsStruct(&commonSettings);
+	
 
 	char username[9] = {0};
 	//---------------------------------------
 	initscr();
 	clear();
-	InitFromOpts(argc, argv, username);
+	InitFromOpts(argc, argv, username, &commonSettings.mainNamedPipeName);
 	InitTextEditor(username, commonSettings);
 	endwin();
 	return 0;
