@@ -13,12 +13,19 @@ typedef struct LineStruct{
 	char *column;
 	char *username;
 } Line;
+
 typedef struct ScreenStruct{
 	Line *line;
 } Screen;
+
 typedef struct ServerSettingsStruct{
 	int nrOfInteractionNamedPipes,
 		timeout,
 		maxUsers;
 	char *dbFilename;
 } ServerSettings;
+
+typedef struct ThreadMainNamedPipeArgsStruct{
+	char* mainNamedPipeName;
+	WINDOW* threadEventsWindow;
+} ThreadMainNamedPipeArgs;

@@ -3,6 +3,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/types.h>	//Used for open()
+#include <sys/stat.h>	//Used for open()
+#include <fcntl.h>		//Used for open()
 #include "client-defaults.h"
 
 int IsValidChar(int ch){
@@ -95,8 +98,14 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 	 * primeiro caractere, o caractere cujo código ASCII é 27 (correspondente também
 	 * à tecla 'Escape' (VER: 'Nota #1')).
 	 *
-	 * Nota #6: A leitura da tecla 'Escape' é desencorajada, mas utilizada nesta aplicação,
-	 * para estar em conformidade com o enunciado do trabalho prático. (VER: 'Source #6')
+	 * Nota #6: Numa outra situação a tecla 'Delete', deveria apagar os caracters à direita
+	 * do cursor, mas para estar em plena conformidade com o enunciado do trabalho prático,
+	 * apaga os caracteresà esquerda.
+	 *
+	 * Nota #7: A leitura da tecla 'Escape' é desencorajada, mas utilizada nesta aplicação,
+	 * para estar de novo em conformidade com o enunciado do trabalho prático.
+	 * (VER: 'Source #6')
+	 *
 	 */
 
 	int posX = offset;
@@ -122,27 +131,30 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 				if((posX+1)<=maxColumns)
 					posX++;
 			}break;
-			case KEY_BACKSPACE:{
-				if((posX-1)>=offset){
-					int auxCh, auxCh2;
-					posX--;
-					mvprintw(posY, posX, "%c", ' ');
-				}
-			}break;
 			default:{
-				lastLineChar = (int) mvinch(posY, maxColumns-1);
-				mvprintw(7,7,"%d",lastLineChar);
-				if(IsValidChar(ch) && ((posX+1) <= maxColumns) &&
-			       IsValidChar(lastLineChar) && IsEmptyOrSpaceChar(lastLineChar)){
-					int auxCh, auxCh2;
-					auxCh = mvinch(posY, posX);
-					mvprintw(posY, posX, "%c", ch);
-					for(int i = posX+1; i < maxColumns; i++){
-						auxCh2 = mvinch(posY, i); 
-						mvprintw(posY, i, "%c", auxCh);
-						auxCh = auxCh2;
+				if(ch == KEY_BACKSPACE || ch == KEY_DC){
+					if((posX-1)>=offset){
+						posX--;
+						mvprintw(posY, posX, "%c", ' ');
+						for(int i = posX; i < maxColumns-1; i++)
+							mvprintw(posY, i, "%c", mvinch(posY, i+1));
+						mvprintw(posY, maxColumns-1, "%c", ' ');
 					}
-					posX++;
+				}
+				else{
+					lastLineChar = (int) mvinch(posY, maxColumns-1);
+					if(IsValidChar(ch) && ((posX+1) <= maxColumns) &&
+				       IsValidChar(lastLineChar) && IsEmptyOrSpaceChar(lastLineChar)){
+						int auxCh, auxCh2;
+						auxCh = mvinch(posY, posX);
+						mvprintw(posY, posX, "%c", ch);
+						for(int i = posX+1; i < maxColumns; i++){
+							auxCh2 = mvinch(posY, i); 
+							mvprintw(posY, i, "%c", auxCh);
+							auxCh = auxCh2;
+						}
+						posX++;
+					}
 				}
 			}break;
 		}	
@@ -176,6 +188,7 @@ int main(int argc, char* const argv[]){
 	initscr();
 	clear();
 	InitFromOpts(argc, argv, username, &commonSettings.mainNamedPipeName);
+	open(commonSettings.mainNamedPipeName, O_WRONLY);
 	InitTextEditor(username, commonSettings);
 	endwin();
 	return 0;
