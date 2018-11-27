@@ -25,7 +25,7 @@ typedef struct ServerSettingsStruct{
 	char *dbFilename;
 } ServerSettings;
 
-typedef struct ThreadMainNamedPipeArgsStruct{
+typedef struct MainNamedPipeThreadArgsStruct{
 	char* mainNamedPipeName;
 	WINDOW* threadEventsWindow;
-} ThreadMainNamedPipeArgs;
+} MainNamedPipeThreadArgs;

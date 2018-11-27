@@ -1,12 +1,19 @@
 #include <stdio.h>
 #include <ncurses.h>
-#include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
+#include <string.h>
+#include <unistd.h>		
 #include <sys/types.h>	//Used for open()
 #include <sys/stat.h>	//Used for open()
 #include <fcntl.h>		//Used for open()
+#include <semaphore.h>
 #include "client-defaults.h"
+
+int ServerIsRunningOnNamedPipe(char* mainNamedPipeName){
+	if(access(mainNamedPipeName, F_OK) == 0)
+		return 1;
+	return 0;
+}
 
 int IsValidChar(int ch){
 	//Source: https://theasciicode.com.ar/ascii-control-characters/null-character-ascii-code-0.html
@@ -22,7 +29,7 @@ int IsEmptyOrSpaceChar(int ch){
 	return 0;
 }
 
-int IsValidUsername(char *username){
+/*int IsValidUsername(char *username){
 	int usernameLenght = strlen(username);
 	if(usernameLenght > 0 && usernameLenght <= 8)
 		return 1;
@@ -46,19 +53,42 @@ void AskUsernameIfEmpty(char *username){
 			clear();
 		}while(!UpdateUsername(username, usernameTmp));
 	}
+}*/
+
+int IsValidUsername(char *username){
+	int usernameLenght = strlen(username);
+	if(usernameLenght > 0 && usernameLenght <= 8)
+		return 1;
+	return 0;
+}
+
+void AskUsernameWhileInvalid(char *username){
+	while(IsValidUsername(username) == 0){
+		printw("Insert your username: ");
+		scanw(" %8[^ \n]", username);
+		clear();
+	}
+}
+
+
+void UpdateUsername(char *username, char* val) {
+	strncpy(username, val, MEDIT_USERNAME_MAXLENGHT);
 }
 
 void UpdateMainNamedPipeName(char **oldMainNamedPipeName, char *newdMainNamedPipeName){
 	(*oldMainNamedPipeName) = newdMainNamedPipeName;
 }
 
+
 void InitFromOpts(int argc, char* const argv[], char *username, char **mainNamedPipeName){
 	//Source: https://www.gnu.org/software/libc/manual/html_node/Getopt.html
 	int c;
 	while ((c = getopt(argc, argv, "u:p:")) != -1){
 	    switch (c){
-	      case 'u': UpdateUsername(username, optarg); break;
-	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
+	      /*case 'u': UpdateUsername(username, optarg); break;
+	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;*/
+	    	case 'u': UpdateUsername(username, optarg); break;
+	      	case 'p': UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
 	    }
 	}
 }
@@ -164,7 +194,6 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 }
 
 void InitTextEditor(char *username, CommonSettings commonSettings){
-	AskUsernameIfEmpty(username);
 	PrintLineNrs(commonSettings.maxLines);
 	EnterLineEditMode(0, commonSettings.maxColumns, 3);
 }
@@ -180,16 +209,23 @@ void InitCommonSettingsStruct(CommonSettings* commonSettings){
 
 int main(int argc, char* const argv[]){
 	CommonSettings commonSettings;
+	char username[MEDIT_USERNAME_MAXLENGHT+1] = {0};
 	InitCommonSettingsStruct(&commonSettings);
-	
-
-	char username[9] = {0};
-	//---------------------------------------
-	initscr();
-	clear();
 	InitFromOpts(argc, argv, username, &commonSettings.mainNamedPipeName);
-	open(commonSettings.mainNamedPipeName, O_WRONLY);
-	InitTextEditor(username, commonSettings);
-	endwin();
+
+	if(ServerIsRunningOnNamedPipe(commonSettings.mainNamedPipeName) == 1){
+		initscr();
+		clear();
+		mvprintw(5,5,"%s\n",username);
+
+		open(commonSettings.mainNamedPipeName, O_WRONLY);
+		//AskUsernameIfEmpty(username);
+		AskUsernameWhileInvalid(username);
+		InitTextEditor(username, commonSettings);
+
+		endwin();
+	} else
+		printf("No server is running on namedpipe: %s\nExiting...\n", commonSettings.mainNamedPipeName);
+
 	return 0;
 }

@@ -4,13 +4,15 @@
 #include <stdlib.h>		//Used for strtol()
 #include <unistd.h>		//Used for access() and getopt()
 #include <ncurses.h>	//Used for ncurses, duuuh
-#include <sys/types.h>	//Used for mkfifo
-#include <sys/stat.h>	//Used for mkfifo
+#include <sys/types.h>	//Used for mkfifo and open
+#include <sys/stat.h>	//Used for mkfifo and open
 #include <pthread.h>	//Used for creating threads
-#include <sys/types.h>	//Used for open()
-#include <sys/stat.h>	//Used for open()
 #include <fcntl.h>		//Used for open()
+#include <semaphore.h>
 #include "server-defaults.h"
+
+MainNamedPipeThreadArgs args;
+sem_t* MainNamedPipeThreadSemaphore;
 
 int ServerIsRunningOnNamedPipe(char* mainNamedPipeName){
 	if(access(mainNamedPipeName, F_OK) == 0)
@@ -263,22 +265,27 @@ void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 }
 
 void* MainNamedPipeThread(void* tArgs){
-	ThreadMainNamedPipeArgs* args;
-	args = (ThreadMainNamedPipeArgs*) tArgs;
-	mkfifo(args->mainNamedPipeName, 0600);
-	mvwprintw(args->threadEventsWindow,2,1, "Main namedpipe created.");
-	wrefresh(args->threadEventsWindow);
-	mvwprintw(args->threadEventsWindow, 3,1, "Waiting for clients...");
-	wrefresh(args->threadEventsWindow);
-	open(args->mainNamedPipeName, O_RDONLY);
-	mvwprintw(args->threadEventsWindow, 3,1, "yolo i guess");
-	/*while(1){
+	MainNamedPipeThreadArgs* pArgs;
+	pArgs = (MainNamedPipeThreadArgs*) tArgs;
+	mkfifo(pArgs[0].mainNamedPipeName, 0600);
 
-	}*/
+	mvwprintw(pArgs[0].threadEventsWindow,2,1, "Main namedpipe created: %s", pArgs[0].mainNamedPipeName);
+	wrefresh(pArgs[0].threadEventsWindow);
+
+	mvwprintw(pArgs[0].threadEventsWindow, 3,1, "Waiting for clients...");
+	wrefresh(pArgs[0].threadEventsWindow);
+
+	int fd;
+	if((fd = open(pArgs[0].mainNamedPipeName, O_RDWR)) >= 0){
+
+		/*while(1){
+
+		}*/	
+	}
 }
 
 void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeName){
-	ThreadMainNamedPipeArgs args;
+	//args -> global var
 	args.threadEventsWindow = threadEventsWindow;
 	args.mainNamedPipeName = mainNamedPipeName;
 
@@ -327,10 +334,12 @@ int main(int argc, char* const argv[]){
 		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName);
 
 		do{
+			MainNamedPipeThreadSemaphore = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 69);
+
 			mvwprintw(window[3], 1, 1, "Command: ");
-			wscanw(window[3], " %299[^\n]", cmd);//---> O scanw já faz wrefresh
-			//ncurses flushes the "input buffer" automatically
-			//FlushStdin();
+			//wscanw() already calls: wrefresh()
+			wscanw(window[3], " %299[^\n]", cmd);
+			//ncurses flushes the "input buffer" automatically, so there's no need to call: FlushStdin();
 			ProcessCommand(cmd, &shutdown, commonSettings, serverSettings, window[0]);
 			ClearWindow(window[3]);
 		}while(shutdown == 0);
@@ -343,3 +352,4 @@ int main(int argc, char* const argv[]){
 	printf("Found another server running on namedpipe: %s\nExiting...\n", commonSettings.mainNamedPipeName);
 	return 0;
 }
+//COMPILE WITH: gcc server.c -o server -lncurses -lpthread -lrt
