@@ -6,13 +6,38 @@
 #include <sys/types.h>	//Used for open()
 #include <sys/stat.h>	//Used for open()
 #include <fcntl.h>		//Used for open()
-#include <semaphore.h>
+#include <semaphore.h>	//Used for sem_open(), sem_wait() and sem_post()
+#include <signal.h>		//Used for signal
 #include "client-defaults.h"
+
+sem_t* interprocMutex;
 
 int ServerIsRunningOnNamedPipe(char* mainNamedPipeName){
 	if(access(mainNamedPipeName, F_OK) == 0)
 		return 1;
 	return 0;
+}
+
+void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int size){
+	int fd;
+	if(action == O_RDONLY || action == O_WRONLY)
+		if((fd = open(mainNamedPipeName, action)) >= 0){
+			switch(action){
+				case O_RDONLY: read(fd, val, size); break;
+				case O_WRONLY: write(fd, val, size); break;
+			}
+			close(fd);
+		}
+}
+
+void WriteReadNamedpipe(int action, char* mainNamedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
+	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 1);
+	sem_wait(interprocMutex);
+		//Critical section
+		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, writeVal, writeValSize);
+		InteractWithNamedPipe(O_RDONLY, mainNamedPipeName, readVal, readValSize);
+		//End critical section
+	sem_post(interprocMutex);
 }
 
 int IsValidChar(int ch){
@@ -29,43 +54,22 @@ int IsEmptyOrSpaceChar(int ch){
 	return 0;
 }
 
-/*int IsValidUsername(char *username){
-	int usernameLenght = strlen(username);
-	if(usernameLenght > 0 && usernameLenght <= 8)
-		return 1;
-	return 0;
-}
-
-int UpdateUsername(char *username, char* val) {
-	if(IsValidUsername(val)){
-		strcpy(username, val);
-		return 1;
+int IsValidUsername(char* mainNamedPipeName, ClientInfo* clientInfo){
+	int usernameLenght = strlen(clientInfo->username);
+	char respServ = '0';
+	if(usernameLenght > 0 && usernameLenght <= 8){
+		WriteReadNamedpipe(O_WRONLY, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, 1);
+		if(respServ == '1')
+			return 1;
 	}
 	return 0;
 }
 
-void AskUsernameIfEmpty(char *username){
-	if(strlen(username) == 0){
-		char usernameTmp[9] = {0};
-		do{
-			printw("Insert your username: ");
-			scanw(" %8[^ \n]", usernameTmp);
-			clear();
-		}while(!UpdateUsername(username, usernameTmp));
-	}
-}*/
-
-int IsValidUsername(char *username){
-	int usernameLenght = strlen(username);
-	if(usernameLenght > 0 && usernameLenght <= 8)
-		return 1;
-	return 0;
-}
-
-void AskUsernameWhileInvalid(char *username){
-	while(IsValidUsername(username) == 0){
-		printw("Insert your username: ");
-		scanw(" %8[^ \n]", username);
+void AskUsernameWhileInvalid(char* mainNamedPipeName, ClientInfo* clientInfo){
+	while(IsValidUsername(mainNamedPipeName, clientInfo) == 0){
+		mvprintw(0,0,"Insert your username: ");
+		scanw(" %8[^ \n]", clientInfo->username);
+		clientInfo->username[MEDIT_USERNAME_MAXLENGHT] = '\0';
 		clear();
 	}
 }
@@ -207,21 +211,30 @@ void InitCommonSettingsStruct(CommonSettings* commonSettings){
 	(*commonSettings).mainNamedPipeName = MEDIT_MAIN_NAMED_PIPE_NAME;
 }
 
+void SigpipeHanler(){
+	printf("Caught SIGPIPE:\nError writting to pipe that's not open for reading.\n");
+	exit(1);
+}
+
+void InitSignalHandlers(){
+	signal(SIGPIPE, SigpipeHanler);
+}
+
 int main(int argc, char* const argv[]){
 	CommonSettings commonSettings;
-	char username[MEDIT_USERNAME_MAXLENGHT+1] = {0};
+	ClientInfo clientInfo = {.username = {0}, .PID = getpid()};
+
 	InitCommonSettingsStruct(&commonSettings);
-	InitFromOpts(argc, argv, username, &commonSettings.mainNamedPipeName);
+	InitFromOpts(argc, argv, clientInfo.username, &commonSettings.mainNamedPipeName);
 
 	if(ServerIsRunningOnNamedPipe(commonSettings.mainNamedPipeName) == 1){
 		initscr();
 		clear();
-		mvprintw(5,5,"%s\n",username);
 
-		open(commonSettings.mainNamedPipeName, O_WRONLY);
-		//AskUsernameIfEmpty(username);
-		AskUsernameWhileInvalid(username);
-		InitTextEditor(username, commonSettings);
+		InitSignalHandlers();
+
+		AskUsernameWhileInvalid(commonSettings.mainNamedPipeName, &clientInfo);
+		InitTextEditor(clientInfo.username, commonSettings);
 
 		endwin();
 	} else

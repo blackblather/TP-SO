@@ -6,3 +6,7 @@ typedef struct CommonSettingsStruct{
 	int maxLines, maxColumns;
 	char *mainNamedPipeName;
 } CommonSettings;
+typedef struct ClientInfoStruct{
+	char username[MEDIT_USERNAME_MAXLENGHT+1];
+	pid_t PID;
+} ClientInfo;

@@ -27,5 +27,7 @@ typedef struct ServerSettingsStruct{
 
 typedef struct MainNamedPipeThreadArgsStruct{
 	char* mainNamedPipeName;
+	char* dbFilename;
+	int maxUsers;
 	WINDOW* threadEventsWindow;
 } MainNamedPipeThreadArgs;

@@ -8,11 +8,17 @@
 #include <sys/stat.h>	//Used for mkfifo and open
 #include <pthread.h>	//Used for creating threads
 #include <fcntl.h>		//Used for open()
-#include <semaphore.h>
+#include <semaphore.h>	//Used for sem_open(), sem_wait() and sem_post()
+#include <signal.h>		//Used for signal
 #include "server-defaults.h"
 
 MainNamedPipeThreadArgs args;
-sem_t* MainNamedPipeThreadSemaphore;
+ClientInfo* loggedInUsers;
+//sem_t* interprocMutex;
+
+void SigStopHandler(){
+	mvprintw(5,5, "SIGSTOP CAUGHT");
+}
 
 int ServerIsRunningOnNamedPipe(char* mainNamedPipeName){
 	if(access(mainNamedPipeName, F_OK) == 0)
@@ -122,19 +128,23 @@ void PrintSettings(WINDOW* outputWindow,int maxLines, int maxColumns, char* dbFi
 	wrefresh(outputWindow);
 }
 
-int UserExists(char *filename, char *username){
+int UserExists(char *dbFilename, char *username){
 	//Source: https://www.tutorialspoint.com/c_standard_library/c_function_fscanf.htm
-	if(FileExists(filename)){
-		FILE *fp;
-		char tmpUser[9];
-
-		fp = fopen(filename, "r");
+	if(FileExists(dbFilename)){
+		FILE* fp;
+		char tmpUser[MEDIT_USERNAME_MAXLENGHT+1];
+		fp = fopen(dbFilename, "r");
 		if (fp != NULL){
-			while(fscanf(fp, "%8[^ \n]", tmpUser))			
+			int fRet;
+			do{
+				memset(tmpUser, 0, sizeof(tmpUser));
+				fRet = fscanf(fp, " %8[^ \n]", tmpUser);
+				tmpUser[MEDIT_USERNAME_MAXLENGHT] = '\0';
 				if(strcmp(tmpUser, username)==0) {
 					fclose(fp);
 					return 1;
 				}
+			}while(fRet > 0);
 			fclose(fp);
 		}
 	}
@@ -161,9 +171,9 @@ void ProcessCommand(char* cmd, int* shutdown, CommonSettings commonSettings, Ser
 			else if(strcmp(cmdPart1, "userExists")==0) {
 				//FOR TEST PURPOSES ONLY
 				if(UserExists("medit.db", "user1"))
-					printw("Encontrou o utilizador\n");
+					mvwprintw(outputWindow, 2, 1, ">Encontrou o utilizador.");
 				else
-					printw("Não encontrou o utilizador\n");
+					mvwprintw(outputWindow, 2, 1, ">Não encontrou o utilizador.");
 			}
 			else if(strcmp(cmdPart1, "statistics")==0){}
 			else if(strcmp(cmdPart1, "users")==0){}
@@ -253,6 +263,30 @@ void InitServerSettingsStruct(ServerSettings* serverSettings){
 	(*serverSettings).dbFilename = MEDIT_DB_NAME;
 }
 
+void InitEmptyLoggedInUsersArray(int maxUsers){
+	loggedInUsers = (ClientInfo*) malloc(maxUsers*sizeof(ClientInfo));
+	for(int i = 0; i < maxUsers; i++){
+		memset(loggedInUsers[i].username, 0, sizeof(loggedInUsers[i].username));
+		//loggedInUsers[i].PID = -1; //-> pid_t is an unsigned int
+	}
+}
+
+int UserIsLoggedIn(char* username, int maxUsers){
+	for(int i = 0; i < maxUsers; i++)
+		if(strcmp(loggedInUsers[i].username, username) == 0)
+			return 1;
+	return 0;
+}
+
+void LogUserIn(ClientInfo newClientInfo, int maxUsers){
+	for(int i = 0; i < maxUsers; i++)
+		if(loggedInUsers[i].username[0] == 0){
+			strcpy(loggedInUsers[i].username, newClientInfo.username);
+			loggedInUsers[i].PID = newClientInfo.PID;
+			return;
+		}
+}
+
 void InitSettingsStructs(CommonSettings* commonSettings, ServerSettings* serverSettings){
 	InitCommonSettingsStruct(commonSettings);
 	InitServerSettingsStruct(serverSettings);
@@ -265,29 +299,62 @@ void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 }
 
 void* MainNamedPipeThread(void* tArgs){
-	MainNamedPipeThreadArgs* pArgs;
-	pArgs = (MainNamedPipeThreadArgs*) tArgs;
-	mkfifo(pArgs[0].mainNamedPipeName, 0600);
 
-	mvwprintw(pArgs[0].threadEventsWindow,2,1, "Main namedpipe created: %s", pArgs[0].mainNamedPipeName);
-	wrefresh(pArgs[0].threadEventsWindow);
+	//interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 1);
+	MainNamedPipeThreadArgs args;
+	args = *(MainNamedPipeThreadArgs*) tArgs;
 
-	mvwprintw(pArgs[0].threadEventsWindow, 3,1, "Waiting for clients...");
-	wrefresh(pArgs[0].threadEventsWindow);
+	mkfifo(args.mainNamedPipeName, 0600);
+
+	mvwprintw(args.threadEventsWindow,2,1, "Main namedpipe created: %s", args.mainNamedPipeName);
+	wrefresh(args.threadEventsWindow);
+
+	mvwprintw(args.threadEventsWindow, 3,1, "Waiting for clients...");
+	wrefresh(args.threadEventsWindow);
 
 	int fd;
-	if((fd = open(pArgs[0].mainNamedPipeName, O_RDWR)) >= 0){
+	char /*username[MEDIT_USERNAME_MAXLENGHT+1],*/ respServ;
+	ClientInfo newClientInfo;
+	while(1){
 
-		/*while(1){
+		/* 
+		 * Previne que o servidor leia a propria resposta
+		 * porque a função write() também bloqueia, não é
+		 * só a função read() que bloqueia.
+		 */
+		respServ = '0';
+  		memset(newClientInfo.username, 0, sizeof(newClientInfo.username));
+		if((fd = open(args.mainNamedPipeName, O_RDONLY)) >= 0){
+			read(fd, &newClientInfo, sizeof(newClientInfo));
+			close(fd);
+		}
+		if(UserExists(args.dbFilename, newClientInfo.username) && UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 0){
+			LogUserIn(newClientInfo, args.maxUsers);
+			respServ = '1';
+		}
+		if((fd = open(args.mainNamedPipeName, O_WRONLY)) >= 0){
+			write(fd, &respServ, 1);
+			close(fd);
+		}
 
-		}*/	
+		/* -> FOR TEST PURPOSES ONLY <- */
+		/*
+		mvwprintw(args.threadEventsWindow, 4,1, "Username: %s", username);
+		mvwprintw(args.threadEventsWindow, 5,1, "respServ: %c", respServ);
+		mvwprintw(args.threadEventsWindow, 6,1, "dbFilename: %s", args.dbFilename);
+		mvwprintw(args.threadEventsWindow, 7,1, "strlen(Username): %d", strlen(username));
+		wrefresh(args.threadEventsWindow);
+		*/
+		/* -> FOR TEST PURPOSES ONLY <- */
 	}
 }
 
-void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeName){
-	//args -> global var
+void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers){
+	//args -> global var (para não ser criada na thread "principal")
 	args.threadEventsWindow = threadEventsWindow;
 	args.mainNamedPipeName = mainNamedPipeName;
+	args.dbFilename = dbFilename;
+	args.maxUsers = maxUsers;
 
 	pthread_t thread;
 
@@ -312,7 +379,6 @@ int main(int argc, char* const argv[]){
 
 	char cmd[300] = {'\0'};
 	int shutdown = 0;
-
 	CommonSettings commonSettings;
 	ServerSettings serverSettings;
 	Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
@@ -321,21 +387,22 @@ int main(int argc, char* const argv[]){
 	InitSettingsStructs(&commonSettings, &serverSettings);
 	InitFromEnvs(&commonSettings.maxLines, &commonSettings.maxColumns, &serverSettings.maxUsers ,&serverSettings.timeout);
 	InitFromOpts(argc, argv, &serverSettings.dbFilename, &commonSettings.mainNamedPipeName, &serverSettings.nrOfInteractionNamedPipes);
-	
-	if(ServerIsRunningOnNamedPipe(commonSettings.mainNamedPipeName) == 0){
-		AllocScreenMemory(&screen, commonSettings);
 
+	if(ServerIsRunningOnNamedPipe(commonSettings.mainNamedPipeName) == 0){
 		//Initialize ncurses
 		initscr();
 		refresh();
 		WINDOW* window[4];
 		InitWindows(window);
+
+		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
+		AllocScreenMemory(&screen, commonSettings);
+
+		signal(SIGSTOP, SigStopHandler);
 		
-		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName);
+		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers);
 
 		do{
-			MainNamedPipeThreadSemaphore = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 69);
-
 			mvwprintw(window[3], 1, 1, "Command: ");
 			//wscanw() already calls: wrefresh()
 			wscanw(window[3], " %299[^\n]", cmd);
@@ -352,4 +419,4 @@ int main(int argc, char* const argv[]){
 	printf("Found another server running on namedpipe: %s\nExiting...\n", commonSettings.mainNamedPipeName);
 	return 0;
 }
-//COMPILE WITH: gcc server.c -o server -lncurses -lpthread -lrt
+//COMPILE WITH: gcc server.c -o server -lncurses -lpthread
