@@ -14,10 +14,20 @@
 
 MainNamedPipeThreadArgs args;
 ClientInfo* loggedInUsers;
-//sem_t* interprocMutex;
+int usersCount = 0;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+sem_t* interprocMutex;
 
-void SigStopHandler(){
-	mvprintw(5,5, "SIGSTOP CAUGHT");
+void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int size){
+	int fd;
+	if(action == O_RDONLY || action == O_WRONLY)
+		if((fd = open(mainNamedPipeName, action)) >= 0){
+			switch(action){
+				case O_RDONLY: read(fd, val, size); break;
+				case O_WRONLY: write(fd, val, size); break;
+			}
+			close(fd);
+		}
 }
 
 int ServerIsRunningOnNamedPipe(char* mainNamedPipeName){
@@ -126,6 +136,13 @@ void PrintSettings(WINDOW* outputWindow,int maxLines, int maxColumns, char* dbFi
 	mvwprintw(outputWindow,7,1,">Number of interaction named pipes: %d", nrOfInteractionNamedPipes);
 	mvwprintw(outputWindow,8,1,">Main named pipe name: %s", mainNamedPipeName);
 	wrefresh(outputWindow);
+}
+
+int UsernameHasValidLenght(char* username){
+	int usernameLenght = strlen(username);
+	if(usernameLenght > 0 && usernameLenght <= MEDIT_USERNAME_MAXLENGHT)
+		return 1;
+	return 0;
 }
 
 int UserExists(char *dbFilename, char *username){
@@ -263,11 +280,17 @@ void InitServerSettingsStruct(ServerSettings* serverSettings){
 	(*serverSettings).dbFilename = MEDIT_DB_NAME;
 }
 
+void InitSettingsStructs(CommonSettings* commonSettings, ServerSettings* serverSettings){
+	InitCommonSettingsStruct(commonSettings);
+	InitServerSettingsStruct(serverSettings);
+}
+
 void InitEmptyLoggedInUsersArray(int maxUsers){
 	loggedInUsers = (ClientInfo*) malloc(maxUsers*sizeof(ClientInfo));
 	for(int i = 0; i < maxUsers; i++){
 		memset(loggedInUsers[i].username, 0, sizeof(loggedInUsers[i].username));
 		//loggedInUsers[i].PID = -1; //-> pid_t is an unsigned int
+		loggedInUsers[i].isUsed = 0;
 	}
 }
 
@@ -280,71 +303,105 @@ int UserIsLoggedIn(char* username, int maxUsers){
 
 void LogUserIn(ClientInfo newClientInfo, int maxUsers){
 	for(int i = 0; i < maxUsers; i++)
-		if(loggedInUsers[i].username[0] == 0){
+		if(loggedInUsers[i].username[0] == 0 && loggedInUsers[i].isUsed == 0){
 			strcpy(loggedInUsers[i].username, newClientInfo.username);
 			loggedInUsers[i].PID = newClientInfo.PID;
+			loggedInUsers[i].isUsed = 1;
 			return;
 		}
 }
 
-void InitSettingsStructs(CommonSettings* commonSettings, ServerSettings* serverSettings){
-	InitCommonSettingsStruct(commonSettings);
-	InitServerSettingsStruct(serverSettings);
+void LogUserInPOS(ClientInfo newClientInfo, int pos){
+	strcpy(loggedInUsers[pos].username, newClientInfo.username);
+	loggedInUsers[pos].PID = newClientInfo.PID;
+	loggedInUsers[pos].isUsed = 1;
 }
 
-void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
-	for(int i = 0; i < commonSettings.maxLines; i++)
-		free((*screen).line[i].column);
-	free((*screen).line);
+int GetLoggedInUserPositionByPID(int PID, int maxUsers){
+	for(int i = 0; i < maxUsers; i++)
+		if(loggedInUsers[i].PID == PID)
+			return i;
+	return -1;
+}
+
+void ReserveLoggedInUserSlot(int PID, int maxUsers){
+	for(int i = 0; i < maxUsers; i++)
+		if(loggedInUsers[i].username[0] == 0 && loggedInUsers[i].isUsed == 0){
+			memset(loggedInUsers[i].username, 0, sizeof(loggedInUsers[i].username));
+			loggedInUsers[i].PID = PID;
+			loggedInUsers[i].isUsed = 1;
+			return;
+		}
+}
+
+//Validates client info, and places new clients on the list to save their PIDs
+void ValidateClientInfo(ClientInfo newClientInfo, char* respServ){
+	int pos = GetLoggedInUserPositionByPID(newClientInfo.PID, args.maxUsers);
+	if(usersCount < args.maxUsers && (newClientInfo.username[0] == 0 || UsernameHasValidLenght(newClientInfo.username) == 0 || UserExists(args.dbFilename, newClientInfo.username) == 0) && pos == -1){
+		/*
+		 * If there's space AND (the username is empty OR
+		 * has an invalid lenght OR does not exist in the DB) AND
+		 * the client's PID is not registered, then reseve it
+		 */
+		ReserveLoggedInUserSlot(newClientInfo.PID, args.maxUsers);
+		usersCount++;
+	} else if(UsernameHasValidLenght(newClientInfo.username) && UserExists(args.dbFilename, newClientInfo.username) && UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 0){
+		//If the username has a valid lenght AND exists in the DB AND is not currently logged in
+		if(pos >= 0){
+			//If the user register his PID before
+			LogUserInPOS(newClientInfo, pos);
+			*respServ = '1';
+		} else if(usersCount < args.maxUsers){
+			//If the user DIDN'T register his PID before (ex: ./client -u username)
+			LogUserIn(newClientInfo, args.maxUsers);
+			usersCount++;
+			*respServ = '1';
+		}
+	}
 }
 
 void* MainNamedPipeThread(void* tArgs){
 
-	//interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 1);
 	MainNamedPipeThreadArgs args;
 	args = *(MainNamedPipeThreadArgs*) tArgs;
 
+	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 1);
 	mkfifo(args.mainNamedPipeName, 0600);
 
 	mvwprintw(args.threadEventsWindow,2,1, "Main namedpipe created: %s", args.mainNamedPipeName);
-	wrefresh(args.threadEventsWindow);
-
 	mvwprintw(args.threadEventsWindow, 3,1, "Waiting for clients...");
 	wrefresh(args.threadEventsWindow);
 
 	int fd;
-	char /*username[MEDIT_USERNAME_MAXLENGHT+1],*/ respServ;
+	char respServ;
 	ClientInfo newClientInfo;
 	while(1){
-
-		/* 
-		 * Previne que o servidor leia a propria resposta
-		 * porque a função write() também bloqueia, não é
-		 * só a função read() que bloqueia.
-		 */
 		respServ = '0';
-  		memset(newClientInfo.username, 0, sizeof(newClientInfo.username));
-		if((fd = open(args.mainNamedPipeName, O_RDONLY)) >= 0){
-			read(fd, &newClientInfo, sizeof(newClientInfo));
-			close(fd);
-		}
-		if(UserExists(args.dbFilename, newClientInfo.username) && UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 0){
-			LogUserIn(newClientInfo, args.maxUsers);
-			respServ = '1';
-		}
-		if((fd = open(args.mainNamedPipeName, O_WRONLY)) >= 0){
-			write(fd, &respServ, 1);
-			close(fd);
-		}
+
+		InteractWithNamedPipe(O_RDONLY, args.mainNamedPipeName, &newClientInfo, sizeof(newClientInfo));
+
+		pthread_mutex_lock(&mutex);
+		//Critical section
+		ValidateClientInfo(newClientInfo, &respServ);
+		//End critical section
+		pthread_mutex_unlock(&mutex);
+
+		InteractWithNamedPipe(O_WRONLY, args.mainNamedPipeName, &respServ, 1);
+		
 
 		/* -> FOR TEST PURPOSES ONLY <- */
+		/*
+		for(int i = 0; i < 3; i++)
+			mvwprintw(args.threadEventsWindow, 4+i,1, "[%d] username: %s, PID: %d, isUsed: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed);
+		wrefresh(args.threadEventsWindow);
+		 */
 		/*
 		mvwprintw(args.threadEventsWindow, 4,1, "Username: %s", username);
 		mvwprintw(args.threadEventsWindow, 5,1, "respServ: %c", respServ);
 		mvwprintw(args.threadEventsWindow, 6,1, "dbFilename: %s", args.dbFilename);
 		mvwprintw(args.threadEventsWindow, 7,1, "strlen(Username): %d", strlen(username));
 		wrefresh(args.threadEventsWindow);
-		*/
+		 */
 		/* -> FOR TEST PURPOSES ONLY <- */
 	}
 }
@@ -365,6 +422,29 @@ void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeNam
   	}
   	//pthread_exit(NULL);
 }
+
+void SignalAllLoggedInUsers(int signum, int maxUsers){
+	for(int i = 0; i < maxUsers; i++)
+		if(loggedInUsers[i].username[0] != 0 || loggedInUsers[i].isUsed == 1)
+			kill(loggedInUsers[i].PID, signum);
+}
+
+void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
+	for(int i = 0; i < commonSettings.maxLines; i++)
+		free((*screen).line[i].column);
+	free((*screen).line);
+}
+
+void Shutdown(Screen* screen, CommonSettings commonSettings, int maxUsers){
+	unlink(commonSettings.mainNamedPipeName);
+	endwin();
+	FreeAllocatedMemory(screen, commonSettings);
+	SignalAllLoggedInUsers(SIGUSR1, maxUsers);
+	sem_unlink(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME);
+	//apaga interactive namedpipes TODOS BLYAT
+}
+
+void SigintHandler(){}
 
 int main(int argc, char* const argv[]){
 	/* 
@@ -395,10 +475,16 @@ int main(int argc, char* const argv[]){
 		WINDOW* window[4];
 		InitWindows(window);
 
+		pthread_mutex_lock(&mutex);
+		/*Critical section (maybe not needed, but the function handles a global var
+		  used in a threaded context, but its on the start of the server)*/
 		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
-		AllocScreenMemory(&screen, commonSettings);
+		//End critical section
+		pthread_mutex_unlock(&mutex);
 
-		signal(SIGSTOP, SigStopHandler);
+		signal(SIGINT, SigintHandler);
+
+		AllocScreenMemory(&screen, commonSettings);
 		
 		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers);
 
@@ -412,9 +498,8 @@ int main(int argc, char* const argv[]){
 		}while(shutdown == 0);
 
 		//Shutdown logic here
-		unlink(commonSettings.mainNamedPipeName);
-		endwin();
-		FreeAllocatedMemory(&screen, commonSettings);
+		END:
+		Shutdown(&screen, commonSettings, serverSettings.maxUsers);
 	} else
 	printf("Found another server running on namedpipe: %s\nExiting...\n", commonSettings.mainNamedPipeName);
 	return 0;

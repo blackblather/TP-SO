@@ -9,4 +9,5 @@ typedef struct CommonSettingsStruct{
 typedef struct ClientInfoStruct{
 	char username[MEDIT_USERNAME_MAXLENGHT+1];
 	pid_t PID;
+	int isUsed;
 } ClientInfo;

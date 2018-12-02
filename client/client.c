@@ -30,8 +30,8 @@ void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int s
 		}
 }
 
-void WriteReadNamedpipe(int action, char* mainNamedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
-	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 1);
+void WriteReadNamedpipe(char* mainNamedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
+	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL);
 	sem_wait(interprocMutex);
 		//Critical section
 		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, writeVal, writeValSize);
@@ -55,13 +55,10 @@ int IsEmptyOrSpaceChar(int ch){
 }
 
 int IsValidUsername(char* mainNamedPipeName, ClientInfo* clientInfo){
-	int usernameLenght = strlen(clientInfo->username);
 	char respServ = '0';
-	if(usernameLenght > 0 && usernameLenght <= 8){
-		WriteReadNamedpipe(O_WRONLY, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, 1);
-		if(respServ == '1')
-			return 1;
-	}
+	WriteReadNamedpipe(mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, 1);
+	if(respServ == '1')
+		return 1;
 	return 0;
 }
 
@@ -216,8 +213,16 @@ void SigpipeHanler(){
 	exit(1);
 }
 
+void Sigusr1Handler(){
+	mvprintw(5, 5, "Caught SIGUSR1: Exiting...");
+	refresh();
+	endwin();
+	exit(1);
+}
+
 void InitSignalHandlers(){
 	signal(SIGPIPE, SigpipeHanler);
+	signal(SIGUSR1, Sigusr1Handler);
 }
 
 int main(int argc, char* const argv[]){
@@ -235,7 +240,6 @@ int main(int argc, char* const argv[]){
 
 		AskUsernameWhileInvalid(commonSettings.mainNamedPipeName, &clientInfo);
 		InitTextEditor(clientInfo.username, commonSettings);
-
 		endwin();
 	} else
 		printf("No server is running on namedpipe: %s\nExiting...\n", commonSettings.mainNamedPipeName);
