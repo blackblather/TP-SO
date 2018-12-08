@@ -12,6 +12,10 @@
 #include <signal.h>		//Used for signal
 #include "server-defaults.h"
 
+CommonSettings commonSettings;
+ServerSettings serverSettings;
+Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
+Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
 MainNamedPipeThreadArgs args;
 ClientInfo* loggedInUsers;
 int usersCount = 0;
@@ -203,12 +207,12 @@ void ProcessCommand(char* cmd, int* shutdown, CommonSettings commonSettings, Ser
 	wrefresh(outputWindow);
 }
 
-void AllocScreenMemory(Screen *screen, CommonSettings commonSettings){
-	(*screen).line = (Line*) malloc(commonSettings.maxLines*sizeof(Line));
+void AllocScreenMemory(){
+	screen.line = (Line*) malloc(commonSettings.maxLines*sizeof(Line));
 	for(int i = 0; i < commonSettings.maxLines; i++){
-		(*screen).line[i].lineNumber = i;
-		(*screen).line[i].column = (char*) malloc(commonSettings.maxColumns*sizeof(char));
-		(*screen).line[i].username = NULL;	//Limpa o lixo que vem por default quando se cria um ponteiro.
+		screen.line[i].lineNumber = i;
+		screen.line[i].column = (char*) malloc(commonSettings.maxColumns*sizeof(char));
+		screen.line[i].username = NULL;	//Limpa o lixo que vem por default quando se cria um ponteiro.
 	}
 }
 
@@ -267,22 +271,22 @@ void InitFromEnvs(int* maxLines, int* maxColumns, int* maxUsers, int* timeout){
 	if((envVal = getenv("MEDIT_TIMEOUT")) != NULL) UpdateTimeout(timeout, envVal);
 }
 
-void InitCommonSettingsStruct(CommonSettings* commonSettings){
-	(*commonSettings).maxLines = MEDIT_MAXLINES;
-	(*commonSettings).maxColumns = MEDIT_MAXCOLUMNS;
-	(*commonSettings).mainNamedPipeName = MEDIT_MAIN_NAMED_PIPE_NAME;
+void InitCommonSettingsStruct(){
+	commonSettings.maxLines = MEDIT_MAXLINES;
+	commonSettings.maxColumns = MEDIT_MAXCOLUMNS;
+	commonSettings.mainNamedPipeName = MEDIT_MAIN_NAMED_PIPE_NAME;
 }
 
-void InitServerSettingsStruct(ServerSettings* serverSettings){
-	(*serverSettings).nrOfInteractionNamedPipes = MEDIT_NR_OF_INTERACTION_NAMED_PIPES;
-	(*serverSettings).timeout = MEDIT_TIMEOUT;
-	(*serverSettings).maxUsers = MEDIT_MAXUSERS;
-	(*serverSettings).dbFilename = MEDIT_DB_NAME;
+void InitServerSettingsStruct(){
+	serverSettings.nrOfInteractionNamedPipes = MEDIT_NR_OF_INTERACTION_NAMED_PIPES;
+	serverSettings.timeout = MEDIT_TIMEOUT;
+	serverSettings.maxUsers = MEDIT_MAXUSERS;
+	serverSettings.dbFilename = MEDIT_DB_NAME;
 }
 
-void InitSettingsStructs(CommonSettings* commonSettings, ServerSettings* serverSettings){
-	InitCommonSettingsStruct(commonSettings);
-	InitServerSettingsStruct(serverSettings);
+void InitSettingsStructs(){
+	InitCommonSettingsStruct();
+	InitServerSettingsStruct();
 }
 
 void InitEmptyLoggedInUsersArray(int maxUsers){
@@ -435,16 +439,14 @@ void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 	free((*screen).line);
 }
 
-void Shutdown(Screen* screen, CommonSettings commonSettings, int maxUsers){
+void Shutdown(){
 	unlink(commonSettings.mainNamedPipeName);
 	endwin();
-	FreeAllocatedMemory(screen, commonSettings);
-	SignalAllLoggedInUsers(SIGUSR1, maxUsers);
+	FreeAllocatedMemory(&screen, commonSettings);
+	SignalAllLoggedInUsers(SIGUSR1, serverSettings.maxUsers);
 	sem_unlink(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME);
 	//apaga interactive namedpipes TODOS BLYAT
 }
-
-void SigintHandler(){}
 
 int main(int argc, char* const argv[]){
 	/* 
@@ -459,12 +461,8 @@ int main(int argc, char* const argv[]){
 
 	char cmd[300] = {'\0'};
 	int shutdown = 0;
-	CommonSettings commonSettings;
-	ServerSettings serverSettings;
-	Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
-	Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
 
-	InitSettingsStructs(&commonSettings, &serverSettings);
+	InitSettingsStructs();
 	InitFromEnvs(&commonSettings.maxLines, &commonSettings.maxColumns, &serverSettings.maxUsers ,&serverSettings.timeout);
 	InitFromOpts(argc, argv, &serverSettings.dbFilename, &commonSettings.mainNamedPipeName, &serverSettings.nrOfInteractionNamedPipes);
 
@@ -475,17 +473,10 @@ int main(int argc, char* const argv[]){
 		WINDOW* window[4];
 		InitWindows(window);
 
-		pthread_mutex_lock(&mutex);
-		/*Critical section (maybe not needed, but the function handles a global var
-		  used in a threaded context, but its on the start of the server)*/
-		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
-		//End critical section
-		pthread_mutex_unlock(&mutex);
-
-		signal(SIGINT, SigintHandler);
-
-		AllocScreenMemory(&screen, commonSettings);
+		signal(SIGINT, Shutdown);
+		AllocScreenMemory();
 		
+		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
 		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers);
 
 		do{
@@ -498,8 +489,7 @@ int main(int argc, char* const argv[]){
 		}while(shutdown == 0);
 
 		//Shutdown logic here
-		END:
-		Shutdown(&screen, commonSettings, serverSettings.maxUsers);
+		Shutdown();
 	} else
 	printf("Found another server running on namedpipe: %s\nExiting...\n", commonSettings.mainNamedPipeName);
 	return 0;
