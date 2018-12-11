@@ -12,6 +12,18 @@
 
 sem_t* interprocMutex;
 
+void PrintLogo(){
+//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Client%20
+//Font: ogre
+	mvprintw(4,9,"--------------------------------------------------------------");
+	mvprintw(5,9,"                   _  _  _       ___  _  _               _    ");
+	mvprintw(6,9,"  /\\/\\    ___   __| |(_)| |_    / __\\| |(_)  ___  _ __  | |_  ");
+	mvprintw(7,9," /    \\  / _ \\ / _` || || __|  / /   | || | / _ \\| '_ \\ | __| ");
+	mvprintw(8,9,"/ /\\/\\ \\|  __/| (_| || || |_  / /___ | || ||  __/| | | || |_  ");
+	mvprintw(9,9,"\\/    \\/ \\___| \\__,_||_| \\__| \\____/ |_||_| \\___||_| |_| \\__| ");
+	mvprintw(10,9,"--------------------------------------------------------------");
+}
+
 int ServerIsRunningOnNamedPipe(char* mainNamedPipeName){
 	if(access(mainNamedPipeName, F_OK) == 0)
 		return 1;
@@ -64,7 +76,8 @@ int IsValidUsername(char* mainNamedPipeName, ClientInfo* clientInfo){
 
 void AskUsernameWhileInvalid(char* mainNamedPipeName, ClientInfo* clientInfo){
 	while(IsValidUsername(mainNamedPipeName, clientInfo) == 0){
-		mvprintw(0,0,"Insert your username: ");
+		PrintLogo();
+		mvprintw(15,28,"Insert your username: ");
 		scanw(" %8[^ \n]", clientInfo->username);
 		clientInfo->username[MEDIT_USERNAME_MAXLENGHT] = '\0';
 		clear();
