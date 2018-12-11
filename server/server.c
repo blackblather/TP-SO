@@ -395,10 +395,10 @@ void InitInteractiveNamedPipes(int maxInteractiveNamedPipes){
 	*/
 	char name[36]; //int max value = +2147483647
 
-	mkdir("../interactiveNamedPipes", 0700);
+	mkdir(MEDIT_INTERACTIVE_NAMED_PIPE_PATH, 0700);
 	for(int i = 0; i < maxInteractiveNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "../interactiveNamedPipes/%d", i);
+		sprintf(name, "%s%d", MEDIT_INTERACTIVE_NAMED_PIPE_PATH, i);
 		mkfifo(name, 0600);
 	}
 	InitEmptyUsersInNamedPipeArray(maxInteractiveNamedPipes);
@@ -491,10 +491,10 @@ void DeleteInteractiveNamedPipes(int maxInteractiveNamedPipes){
 	char name[36];
 	for(int i = 0; i < maxInteractiveNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "../interactiveNamedPipes/%d", i);
+		sprintf(name, "%s%d", MEDIT_INTERACTIVE_NAMED_PIPE_PATH, i);
 		unlink(name);
 	}
-	rmdir("../interactiveNamedPipes");
+	rmdir(MEDIT_INTERACTIVE_NAMED_PIPE_PATH);
 }
 
 void Shutdown(){
