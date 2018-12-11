@@ -364,6 +364,25 @@ void ValidateClientInfo(ClientInfo newClientInfo, char* respServ){
 	}
 }
 
+void InitInteractiveNamedPipes(int maxInteractiveNamedPipes){
+	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
+
+	/*
+	  Este array tem 10 posições para exitar ter que calcular
+	  o numero de dígitos da var "maxInteractiveNamedPipes" e alocar um
+	  array dinamico. Assim calculo um array com base no nr máximo de digitos
+	  que um inteiro pode ter (10) + tamanho do caminho (25) + '\0' (1) = 36
+	*/
+	char name[36]; //int max value = +2147483647
+
+	mkdir("../interactiveNamedPipes", 0700);
+	for(int i = 0; i < maxInteractiveNamedPipes; i++){
+		memset(name, 0, sizeof(name));
+		sprintf(name, "../interactiveNamedPipes/%d", i);
+		mkfifo(name, 0600);
+	}
+}
+
 void* MainNamedPipeThread(void* tArgs){
 
 	MainNamedPipeThreadArgs args;
@@ -439,12 +458,25 @@ void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 	free((*screen).line);
 }
 
+void DeleteInteractiveNamedPipes(int maxInteractiveNamedPipes){
+	//Ver comment em InitInteractiveNamedPipes(...)
+	char name[36];
+	for(int i = 0; i < maxInteractiveNamedPipes; i++){
+		memset(name, 0, sizeof(name));
+		sprintf(name, "../interactiveNamedPipes/%d", i);
+		unlink(name);
+	}
+	rmdir("../interactiveNamedPipes");
+}
+
 void Shutdown(){
 	unlink(commonSettings.mainNamedPipeName);
 	endwin();
 	FreeAllocatedMemory(&screen, commonSettings);
 	SignalAllLoggedInUsers(SIGUSR1, serverSettings.maxUsers);
 	sem_unlink(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME);
+	DeleteInteractiveNamedPipes(serverSettings.nrOfInteractionNamedPipes);
+	exit(1);
 	//apaga interactive namedpipes TODOS BLYAT
 }
 
@@ -477,6 +509,7 @@ int main(int argc, char* const argv[]){
 		AllocScreenMemory();
 		
 		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
+		InitInteractiveNamedPipes(serverSettings.nrOfInteractionNamedPipes);
 		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers);
 
 		do{
