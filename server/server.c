@@ -19,10 +19,7 @@ Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
 MainNamedPipeThreadArgs args;
 ClientInfo* loggedInUsers;
 int usersCount = 0;
-int* namedPipeUsersCount;		//Array com numero de clientes por namedpipe de interação
-
 pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mutex_namedPipeUsersCount = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
 
 void PrintLogo(){
@@ -313,12 +310,6 @@ void InitEmptyLoggedInUsersArray(int maxUsers){
 	}
 }
 
-void InitEmptyNamedPipeUsersCountArray(int nrOfInteractionNamedPipes){
-	namedPipeUsersCount = (int*) malloc(nrOfInteractionNamedPipes*sizeof(int));
-	for(int i = 0; i < nrOfInteractionNamedPipes; i++)
-		namedPipeUsersCount[i] = 0;
-}
-
 int UserIsLoggedIn(char* username, int maxUsers){
 	for(int i = 0; i < maxUsers; i++)
 		if(strcmp(loggedInUsers[i].username, username) == 0)
@@ -359,17 +350,25 @@ void ReserveLoggedInUserSlot(int PID, int maxUsers){
 		}
 }
 
+void InitEmptyNamedPipeUsersCountArray(int** namedPipeUsersCount, int nrOfInteractionNamedPipes){
+	(*namedPipeUsersCount) = (int*) malloc(nrOfInteractionNamedPipes*sizeof(int));
+	for(int i = 0; i < nrOfInteractionNamedPipes; i++)
+		(*namedPipeUsersCount)[i] = 0;
+}
+
 int GetBestInteractionNamedPipeIndex(int nrOfInteractionNamedPipes){
-	int index = 0;
-	pthread_mutex_lock(&mutex_namedPipeUsersCount);
-	//Critical section
+	//Array com numero de clientes por namedpipe de interação
+	int minIndex = 0;
+	int* namedPipeUsersCount;
+
+	InitEmptyNamedPipeUsersCountArray(&namedPipeUsersCount, nrOfInteractionNamedPipes);
+
 	for(int i = 0; i < nrOfInteractionNamedPipes - 1; i++)
-		if(namedPipeUsersCount[i+1]<namedPipeUsersCount[i])
-			index = i+1;
-		
-	//End critical section
-	pthread_mutex_unlock(&mutex_namedPipeUsersCount);
-	return index;
+		if(namedPipeUsersCount[i+1]<namedPipeUsersCount[minIndex])
+			minIndex = i+1;
+
+	free(namedPipeUsersCount);
+	return minIndex;
 }
 
 /*
@@ -411,7 +410,7 @@ void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
 
 	/*
-	  Este array tem 10 posições para exitar ter que calcular
+	  Este array tem 10 posições para evitar ter que calcular
 	  o numero de dígitos da var "nrOfInteractionNamedPipes" e alocar um
 	  array dinamico. Assim calculo um array com base no nr máximo de digitos
 	  que um inteiro pode ter (10) + tamanho do caminho (25) + '\0' (1) = 36
@@ -424,7 +423,6 @@ void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
 		sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
 		mkfifo(name, 0600);
 	}
-	InitEmptyNamedPipeUsersCountArray(nrOfInteractionNamedPipes);
 }
 
 void* MainNamedPipeThread(void* tArgs){
@@ -501,7 +499,7 @@ void FreeAllocatedScreenMemory(Screen *screen, CommonSettings commonSettings){
 
 void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 	FreeAllocatedScreenMemory(screen, commonSettings);
-	free(namedPipeUsersCount);
+	//insert other dynamic array "free(...)'s" here
 }
 
 void DeleteInteractionNamedPipes(int nrOfInteractionNamedPipes){
