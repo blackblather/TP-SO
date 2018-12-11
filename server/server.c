@@ -19,9 +19,10 @@ Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
 MainNamedPipeThreadArgs args;
 ClientInfo* loggedInUsers;
 int usersCount = 0;
-int* usersInNamedPipe;
+int* namedPipeUsersCount;		//Array com numero de clientes por namedpipe de interação
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex_namedPipeUsersCount = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
 
 void PrintLogo(){
@@ -245,7 +246,7 @@ void UpdateNumberThatCanOnlyBePositive(int *oldNr, char *newNrStr){
 		(*oldNr) = newNrTmp;
 }
 
-void UpdateNumberOfInteractiveNamedPipes(int *oldNrOfInteractionNamedPipes, char *newNrOfInteractionNamedPipesSTR){
+void UpdateNumberOfInteractionNamedPipes(int *oldNrOfInteractionNamedPipes, char *newNrOfInteractionNamedPipesSTR){
 	UpdateNumberThatCanOnlyBePositive(oldNrOfInteractionNamedPipes, newNrOfInteractionNamedPipesSTR);
 }
 
@@ -272,7 +273,7 @@ void InitFromOpts(int argc, char* const argv[], char **dbFilename, char **mainNa
 	    switch (c){
 	      case 'f': UpdateDbFilename(dbFilename, optarg); break;
 	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
-	      case 'n': UpdateNumberOfInteractiveNamedPipes(nrOfInteractionNamedPipes, optarg); break;
+	      case 'n': UpdateNumberOfInteractionNamedPipes(nrOfInteractionNamedPipes, optarg); break;
 	    }
 	}
 }
@@ -312,10 +313,10 @@ void InitEmptyLoggedInUsersArray(int maxUsers){
 	}
 }
 
-void InitEmptyUsersInNamedPipeArray(int maxInteractiveNamedPipes){
-	usersInNamedPipe = (int*) malloc(maxInteractiveNamedPipes*sizeof(int));
-	for(int i = 0; i < maxInteractiveNamedPipes; i++)
-		usersInNamedPipe[i] = 0;
+void InitEmptyNamedPipeUsersCountArray(int nrOfInteractionNamedPipes){
+	namedPipeUsersCount = (int*) malloc(nrOfInteractionNamedPipes*sizeof(int));
+	for(int i = 0; i < nrOfInteractionNamedPipes; i++)
+		namedPipeUsersCount[i] = 0;
 }
 
 int UserIsLoggedIn(char* username, int maxUsers){
@@ -358,8 +359,27 @@ void ReserveLoggedInUserSlot(int PID, int maxUsers){
 		}
 }
 
-//Validates client info, and places new clients on the list to save their PIDs
-void ValidateClientInfo(ClientInfo newClientInfo, char* respServ){
+int GetBestInteractionNamedPipeIndex(int nrOfInteractionNamedPipes){
+	int index = 0;
+	pthread_mutex_lock(&mutex_namedPipeUsersCount);
+	//Critical section
+	for(int i = 0; i < nrOfInteractionNamedPipes - 1; i++)
+		if(namedPipeUsersCount[i+1]<namedPipeUsersCount[i])
+			index = i+1;
+		
+	//End critical section
+	pthread_mutex_unlock(&mutex_namedPipeUsersCount);
+	return index;
+}
+
+/*
+Validates client info, and places new clients on the list to save their PIDs
+No processo de validação, mais nenhuma thread pode mexer no array loggedInUsers
+*/
+void ValidateClientInfo(ClientInfo newClientInfo, char* respServ, int nrOfInteractionNamedPipes){
+	pthread_mutex_lock(&mutex_loggedInUsers);
+
+	//Critical section
 	int pos = GetLoggedInUserPositionByPID(newClientInfo.PID, args.maxUsers);
 	if(usersCount < args.maxUsers && (newClientInfo.username[0] == 0 || UsernameHasValidLenght(newClientInfo.username) == 0 || UserExists(args.dbFilename, newClientInfo.username) == 0) && pos == -1){
 		/*
@@ -382,26 +402,29 @@ void ValidateClientInfo(ClientInfo newClientInfo, char* respServ){
 			*respServ = '1';
 		}
 	}
+	//End critical section
+
+	pthread_mutex_unlock(&mutex_loggedInUsers);
 }
 
-void InitInteractiveNamedPipes(int maxInteractiveNamedPipes){
+void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
 
 	/*
 	  Este array tem 10 posições para exitar ter que calcular
-	  o numero de dígitos da var "maxInteractiveNamedPipes" e alocar um
+	  o numero de dígitos da var "nrOfInteractionNamedPipes" e alocar um
 	  array dinamico. Assim calculo um array com base no nr máximo de digitos
 	  que um inteiro pode ter (10) + tamanho do caminho (25) + '\0' (1) = 36
 	*/
 	char name[36]; //int max value = +2147483647
 
-	mkdir(MEDIT_INTERACTIVE_NAMED_PIPE_PATH, 0700);
-	for(int i = 0; i < maxInteractiveNamedPipes; i++){
+	mkdir(MEDIT_INTERACTION_NAMED_PIPE_PATH, 0700);
+	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", MEDIT_INTERACTIVE_NAMED_PIPE_PATH, i);
+		sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
 		mkfifo(name, 0600);
 	}
-	InitEmptyUsersInNamedPipeArray(maxInteractiveNamedPipes);
+	InitEmptyNamedPipeUsersCountArray(nrOfInteractionNamedPipes);
 }
 
 void* MainNamedPipeThread(void* tArgs){
@@ -424,13 +447,7 @@ void* MainNamedPipeThread(void* tArgs){
 
 		InteractWithNamedPipe(O_RDONLY, args.mainNamedPipeName, &newClientInfo, sizeof(newClientInfo));
 
-		//No processo de validação, mais nenhuma
-		//thread pode mexer no array loggedInUsers
-		pthread_mutex_lock(&mutex);
-		//Critical section
-		ValidateClientInfo(newClientInfo, &respServ);
-		//End critical section
-		pthread_mutex_unlock(&mutex);
+		ValidateClientInfo(newClientInfo, &respServ, args.nrOfInteractionNamedPipes);
 
 		InteractWithNamedPipe(O_WRONLY, args.mainNamedPipeName, &respServ, 1);
 		
@@ -452,12 +469,13 @@ void* MainNamedPipeThread(void* tArgs){
 	}
 }
 
-void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers){
+void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes){
 	//args -> global var (para não ser criada na thread "principal")
-	args.threadEventsWindow = threadEventsWindow;
 	args.mainNamedPipeName = mainNamedPipeName;
 	args.dbFilename = dbFilename;
 	args.maxUsers = maxUsers;
+	args.nrOfInteractionNamedPipes = nrOfInteractionNamedPipes;
+	args.threadEventsWindow = threadEventsWindow;
 
 	pthread_t thread;
 
@@ -483,18 +501,18 @@ void FreeAllocatedScreenMemory(Screen *screen, CommonSettings commonSettings){
 
 void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 	FreeAllocatedScreenMemory(screen, commonSettings);
-	free(usersInNamedPipe);
+	free(namedPipeUsersCount);
 }
 
-void DeleteInteractiveNamedPipes(int maxInteractiveNamedPipes){
-	//Ver comment em InitInteractiveNamedPipes(...)
+void DeleteInteractionNamedPipes(int nrOfInteractionNamedPipes){
+	//Ver comment em InitInteractionNamedPipes(...)
 	char name[36];
-	for(int i = 0; i < maxInteractiveNamedPipes; i++){
+	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", MEDIT_INTERACTIVE_NAMED_PIPE_PATH, i);
+		sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
 		unlink(name);
 	}
-	rmdir(MEDIT_INTERACTIVE_NAMED_PIPE_PATH);
+	rmdir(MEDIT_INTERACTION_NAMED_PIPE_PATH);
 }
 
 void Shutdown(){
@@ -503,9 +521,9 @@ void Shutdown(){
 	FreeAllocatedMemory(&screen, commonSettings);
 	SignalAllLoggedInUsers(SIGUSR1, serverSettings.maxUsers);
 	sem_unlink(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME);
-	DeleteInteractiveNamedPipes(serverSettings.nrOfInteractionNamedPipes);
+	DeleteInteractionNamedPipes(serverSettings.nrOfInteractionNamedPipes);
 	exit(1);
-	//apaga interactive namedpipes TODOS BLYAT
+	//apaga interaction namedpipes TODOS BLYAT
 }
 
 int main(int argc, char* const argv[]){
@@ -540,8 +558,8 @@ int main(int argc, char* const argv[]){
 		AllocScreenMemory();
 		
 		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
-		InitInteractiveNamedPipes(serverSettings.nrOfInteractionNamedPipes);
-		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers);
+		InitInteractionNamedPipes(serverSettings.nrOfInteractionNamedPipes);
+		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers, serverSettings.nrOfInteractionNamedPipes);
 
 		do{
 			mvwprintw(window[3], 1, 1, "Command: ");
