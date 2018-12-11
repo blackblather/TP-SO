@@ -12,15 +12,29 @@
 #include <signal.h>		//Used for signal
 #include "server-defaults.h"
 
-CommonSettings commonSettings;
-ServerSettings serverSettings;
+CommonSettings commonSettings;	//Global por causa da função Shutdown(), usada ao chamar o SIGINT
+ServerSettings serverSettings;	//Global por causa da função Shutdown(), usada ao chamar o SIGINT
 Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
 Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
 MainNamedPipeThreadArgs args;
 ClientInfo* loggedInUsers;
 int usersCount = 0;
+int* usersInNamedPipe;
+
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
+
+void PrintLogo(){
+//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Server%20
+//Font: ogre
+	mvprintw(8,9,"--------------------------------------------------------------");
+	mvprintw(9,9,"	            _  _  _     __                                ");
+	mvprintw(10,9,"  /\\/\\    ___   __| |(_)| |_  / _\\  ___  _ _ __   __ ___  _ _  ");
+	mvprintw(11,9," /    \\  / _ \\ / _` || || __| \\ \\  / _ \\| '_|\\ \\ / // _ \\| '_| ");
+	mvprintw(12,9,"/ /\\/\\ \\|  __/| (_| || || |_  _\\ \\|  __/| |   \\ V /|  __/| |    ");
+	mvprintw(13,9,"\\/    \\/ \\___| \\__,_||_| \\__| \\__/ \\___||_|    \\_/  \\___||_|    ");
+	mvprintw(14,9,"--------------------------------------------------------------");
+}
 
 void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int size){
 	int fd;
@@ -298,6 +312,12 @@ void InitEmptyLoggedInUsersArray(int maxUsers){
 	}
 }
 
+void InitEmptyUsersInNamedPipeArray(int maxInteractiveNamedPipes){
+	usersInNamedPipe = (int*) malloc(maxInteractiveNamedPipes*sizeof(int));
+	for(int i = 0; i < maxInteractiveNamedPipes; i++)
+		usersInNamedPipe[i] = 0;
+}
+
 int UserIsLoggedIn(char* username, int maxUsers){
 	for(int i = 0; i < maxUsers; i++)
 		if(strcmp(loggedInUsers[i].username, username) == 0)
@@ -381,6 +401,7 @@ void InitInteractiveNamedPipes(int maxInteractiveNamedPipes){
 		sprintf(name, "../interactiveNamedPipes/%d", i);
 		mkfifo(name, 0600);
 	}
+	InitEmptyUsersInNamedPipeArray(maxInteractiveNamedPipes);
 }
 
 void* MainNamedPipeThread(void* tArgs){
@@ -403,6 +424,8 @@ void* MainNamedPipeThread(void* tArgs){
 
 		InteractWithNamedPipe(O_RDONLY, args.mainNamedPipeName, &newClientInfo, sizeof(newClientInfo));
 
+		//No processo de validação, mais nenhuma
+		//thread pode mexer no array loggedInUsers
 		pthread_mutex_lock(&mutex);
 		//Critical section
 		ValidateClientInfo(newClientInfo, &respServ);
@@ -452,10 +475,15 @@ void SignalAllLoggedInUsers(int signum, int maxUsers){
 			kill(loggedInUsers[i].PID, signum);
 }
 
-void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
+void FreeAllocatedScreenMemory(Screen *screen, CommonSettings commonSettings){
 	for(int i = 0; i < commonSettings.maxLines; i++)
 		free((*screen).line[i].column);
 	free((*screen).line);
+}
+
+void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
+	FreeAllocatedScreenMemory(screen, commonSettings);
+	free(usersInNamedPipe);
 }
 
 void DeleteInteractiveNamedPipes(int maxInteractiveNamedPipes){
@@ -501,7 +529,10 @@ int main(int argc, char* const argv[]){
 	if(ServerIsRunningOnNamedPipe(commonSettings.mainNamedPipeName) == 0){
 		//Initialize ncurses
 		initscr();
+		PrintLogo();
 		refresh();
+		sleep(3);
+		clear();
 		WINDOW* window[4];
 		InitWindows(window);
 
