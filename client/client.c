@@ -67,9 +67,9 @@ int IsEmptyOrSpaceChar(int ch){
 }
 
 int IsValidUsername(char* mainNamedPipeName, ClientInfo* clientInfo){
-	char respServ = '0';
-	WriteReadNamedpipe(mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, 1);
-	if(respServ == '1')
+	int respServ = -1;
+	WriteReadNamedpipe(mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(int));
+	if(respServ > -1)
 		return 1;
 	return 0;
 }
