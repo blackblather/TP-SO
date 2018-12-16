@@ -43,8 +43,8 @@ void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int s
 		}
 }
 
-void WriteReadNamedpipe(char* semName, char* namedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
-	interprocMutex = sem_open(semName, O_EXCL);
+void WriteReadNamedpipe(char* semName, int oflag, char* namedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
+	interprocMutex = sem_open(semName, oflag);
 	sem_wait(interprocMutex);
 		//Critical section
 		InteractWithNamedPipe(O_WRONLY, namedPipeName, writeVal, writeValSize);
@@ -69,7 +69,7 @@ int IsEmptyOrSpaceChar(int ch){
 
 int CantLogin(char* mainNamedPipeName, ClientInfo* clientInfo){
 	int respServ = -1;
-	WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(int));
+	WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(int));
 	if(respServ == -1)
 		return 1;
 	return 0;
