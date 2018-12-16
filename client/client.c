@@ -6,6 +6,7 @@
 #include <sys/types.h>	//Used for open()
 #include <sys/stat.h>	//Used for open()
 #include <fcntl.h>		//Used for open()
+#include <pthread.h>	//Used for creating threads
 #include <semaphore.h>	//Used for sem_open(), sem_wait() and sem_post()
 #include <signal.h>		//Used for signal
 #include "client-defaults.h"
@@ -13,8 +14,8 @@
 sem_t* interprocMutex;
 
 void PrintLogo(){
-//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Client%20
-//Font: ogre
+	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Client%20
+	//Font: ogre
 	mvprintw(4,9,"--------------------------------------------------------------");
 	mvprintw(5,9,"                   _  _  _       ___  _  _               _    ");
 	mvprintw(6,9,"  /\\/\\    ___   __| |(_)| |_    / __\\| |(_)  ___  _ __  | |_  ");
@@ -42,12 +43,12 @@ void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int s
 		}
 }
 
-void WriteReadNamedpipe(char* mainNamedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
-	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL);
+void WriteReadNamedpipe(char* semName, char* namedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
+	interprocMutex = sem_open(semName, O_EXCL);
 	sem_wait(interprocMutex);
 		//Critical section
-		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, writeVal, writeValSize);
-		InteractWithNamedPipe(O_RDONLY, mainNamedPipeName, readVal, readValSize);
+		InteractWithNamedPipe(O_WRONLY, namedPipeName, writeVal, writeValSize);
+		InteractWithNamedPipe(O_RDONLY, namedPipeName, readVal, readValSize);
 		//End critical section
 	sem_post(interprocMutex);
 }
@@ -66,16 +67,16 @@ int IsEmptyOrSpaceChar(int ch){
 	return 0;
 }
 
-int IsValidUsername(char* mainNamedPipeName, ClientInfo* clientInfo){
+int CantLogin(char* mainNamedPipeName, ClientInfo* clientInfo){
 	int respServ = -1;
-	WriteReadNamedpipe(mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(int));
-	if(respServ > -1)
+	WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(int));
+	if(respServ == -1)
 		return 1;
 	return 0;
 }
 
-void AskUsernameWhileInvalid(char* mainNamedPipeName, ClientInfo* clientInfo){
-	while(IsValidUsername(mainNamedPipeName, clientInfo) == 0){
+void AskUsernameWhileNotLoggedIn(char* mainNamedPipeName, ClientInfo* clientInfo){
+	while(CantLogin(mainNamedPipeName, clientInfo)){
 		PrintLogo();
 		mvprintw(15,28,"Insert your username: ");
 		scanw(" %8[^ \n]", clientInfo->username);
@@ -208,8 +209,18 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 }
 
 void InitTextEditor(char *username, CommonSettings commonSettings){
+	//Quando chega aqui, o utilizador já fez login
 	PrintLineNrs(commonSettings.maxLines);
+
+	//recebe estrutura de como estão as coisas neste momento e imprime estrutura (tudo tem que bloquear até
+	//ter carregado as coisas todas, para nao haver conflitos)
+
+	//inicia thread de receber chars do servidor (podia implementar uma espécie de pilha FILO (lista ligada com
+	//ponteiro para a ultima posição, e cada item aponta para a anterior) que armazena tudo o que é Chars a imprimir)1
+
+	//entra em modo de "navegação livre"
 	EnterLineEditMode(0, commonSettings.maxColumns, 3);
+	//quando o user clica "Enter", se a linha estiver livre, entra no modo de edição dessa linha
 }
 
 void InitCommonSettingsStruct(CommonSettings* commonSettings){
@@ -251,7 +262,7 @@ int main(int argc, char* const argv[]){
 
 		InitSignalHandlers();
 
-		AskUsernameWhileInvalid(commonSettings.mainNamedPipeName, &clientInfo);
+		AskUsernameWhileNotLoggedIn(commonSettings.mainNamedPipeName, &clientInfo);
 		InitTextEditor(clientInfo.username, commonSettings);
 		endwin();
 	} else
