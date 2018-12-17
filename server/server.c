@@ -5,7 +5,7 @@
 #include <unistd.h>		//Used for access() and getopt()
 #include <ncurses.h>	//Used for ncurses, duuuh
 #include <sys/types.h>	//Used for mkfifo and open
-#include <sys/stat.h>	//Used for mkfifo and open
+#include <sys/stat.h>	//Used for mkfifo, open and stat
 #include <pthread.h>	//Used for creating threads
 #include <fcntl.h>		//Used for open()
 #include <semaphore.h>	//Used for sem_open(), sem_wait() and sem_post()
@@ -21,6 +21,12 @@ ClientInfo* loggedInUsers;
 int usersCount = 0;
 pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
+/* VAR: dirname
+	 * tamanho do caminho (14) +
+	 * nr máximo de digitos que um inteiro pode ter (10) +
+	 * '/' (1)
+	 * '\0' (1) = 26*/
+char interactionNamedPipeDirName[25];
 
 void PrintLogo(){
 	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Server%20
@@ -32,6 +38,21 @@ void PrintLogo(){
 	mvprintw(12,9,"/ /\\/\\ \\|  __/| (_| || || |_  _\\ \\|  __/| |   \\ V /|  __/| |    ");
 	mvprintw(13,9,"\\/    \\/ \\___| \\__,_||_| \\__| \\__/ \\___||_|    \\_/  \\___||_|    ");
 	mvprintw(14,9,"--------------------------------------------------------------");
+}
+
+int DirectoryExists(char *path) {
+	//Source #1: https://codeforwin.org/2018/03/c-program-check-file-or-directory-exists-not.html
+	//Source #2: http://man7.org/linux/man-pages/man2/stat.2.html
+
+    struct stat stats;
+
+    stat(path, &stats);
+
+    // Check for file existence
+    if (S_ISDIR(stats.st_mode))
+        return 1;
+
+    return 0;
 }
 
 void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int size){
@@ -415,27 +436,43 @@ void ValidateClientInfo(ClientInfo newClientInfo, int* respServ, int nrOfInterac
 	pthread_mutex_unlock(&mutex_loggedInUsers);
 }
 
+void CreateInteractionNamedPipeDir(){
+	//Interaction namedpipe dir name starts from "server_1" to "server_2" and "server_3" and so on
+	if(DirectoryExists(interactionNamedPipeDirName) == 0)
+		mkdir(MEDIT_INTERACTION_NAMED_PIPE_PATH, 0700);
+
+	int i = 1;
+	do{
+		sprintf(interactionNamedPipeDirName, "%sserver_%d/", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
+		i++;
+	}while(DirectoryExists(interactionNamedPipeDirName) == 1);
+	mkdir(interactionNamedPipeDirName, 0700);
+}
+
 void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
 
-	//nr máximo de digitos que um inteiro pode ter (10) +
-	//tamanho do caminho (7) +
-	//mainNamedPipeName (???) +
-	// '\0' (1) = ???
+	/* VAR: name
+	 *     VAR: dirname (global var)
+	 *     tamanho do caminho (14) +
+	 *     nr máximo de digitos que um inteiro pode ter (10) +
+	 *     '/' (1) +
+	 * nr máximo de digitos que um inteiro pode ter (10) +
+	 * '\0' (1) = 36 */
 
 	//(OLD) char name[18]; //int max value = +2147483647 (10 digitos)
 
-	//There's no problem using strlen here, because "commonSettings.mainNamedPipeName" is always terminated with '\0'
-	char* name = (char*) malloc((10+7+strlen(commonSettings.mainNamedPipeName)+1)*sizeof(char));
+	char name[36];
+	
+	CreateInteractionNamedPipeDir();
 
-	mkdir(MEDIT_INTERACTION_NAMED_PIPE_PATH, 0700);
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, commonSettings.mainNamedPipeName, i);
+		sprintf(name, "%s%d", interactionNamedPipeDirName, i);
+
 		//(OLD) sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
 		mkfifo(name, 0600);
 	}
-	free(name);
 }
 
 void* MainNamedPipeThread(void* tArgs){
@@ -448,6 +485,7 @@ void* MainNamedPipeThread(void* tArgs){
 
 	mvwprintw(args.threadEventsWindow,2,1, "Main namedpipe created: %s", args.mainNamedPipeName);
 	mvwprintw(args.threadEventsWindow, 3,1, "Waiting for clients...");
+	mvwprintw(args.threadEventsWindow, 4,1, "%s", interactionNamedPipeDirName);
 	wrefresh(args.threadEventsWindow);
 
 	int fd;
@@ -516,13 +554,13 @@ void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 
 void DeleteInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Ver comment em InitInteractionNamedPipes(...)
-	char* name = (char*) malloc((10+7+strlen(commonSettings.mainNamedPipeName)+1)*sizeof(char));
+	char name[36];
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, commonSettings.mainNamedPipeName, i);
+		sprintf(name, "%s%d", interactionNamedPipeDirName, i);
 		unlink(name);
 	}
-	free(name);
+	rmdir(interactionNamedPipeDirName);
 	rmdir(MEDIT_INTERACTION_NAMED_PIPE_PATH);
 }
 
@@ -534,7 +572,6 @@ void Shutdown(){
 	sem_unlink(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME);
 	DeleteInteractionNamedPipes(serverSettings.nrOfInteractionNamedPipes);
 	exit(1);
-	//apaga interaction namedpipes TODOS BLYAT
 }
 
 int main(int argc, char* const argv[]){
@@ -587,4 +624,10 @@ int main(int argc, char* const argv[]){
 	printf("Found another server running on namedpipe: %s\nExiting...\n", commonSettings.mainNamedPipeName);
 	return 0;
 }
-//COMPILE WITH: gcc server.c -o server -lncurses -lpthread
+//COMPILE WITH: gcc server.c -o server -lncurses -lpthread -lrt
+//NOTAS PARA INCLUIR NO RELATÓRIO DA META 3:
+/*
+ * -> O login tinha um bug. Quando se iniciava um cliente com o parâmetro -p e um username que ja tivesse login feito,
+ *    esse cliente não ficava com um espaço reservado no servidor. (fixed)
+ * -> 
+ */
