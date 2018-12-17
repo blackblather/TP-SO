@@ -23,8 +23,8 @@ pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
 
 void PrintLogo(){
-//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Server%20
-//Font: ogre
+	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Server%20
+	//Font: ogre
 	mvprintw(8,9,"--------------------------------------------------------------");
 	mvprintw(9,9,"	            _  _  _     __                                ");
 	mvprintw(10,9,"  /\\/\\    ___   __| |(_)| |_  / _\\  ___  _ _ __   __ ___  _ _  ");
@@ -132,7 +132,7 @@ void SaveFile(char* filename){
 		printw("Invalid command.\n");
 }
 
-//TOD: Acutally free line (só valida os parametros)
+//TODO: Acutally free line (só valida os parametros)
 void FreeLine(char* nrStr, int maxLines){
 	//Source: https://en.cppreference.com/w/c/string/byte/strtol
 	//Helper source: https://stackoverflow.com/questions/11279767/how-do-i-make-sure-that-strtol-have-returned-successfully
@@ -418,20 +418,24 @@ void ValidateClientInfo(ClientInfo newClientInfo, int* respServ, int nrOfInterac
 void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
 
-	/*
-	  Este array tem 10 posições para evitar ter que calcular
-	  o numero de dígitos da var "nrOfInteractionNamedPipes" e alocar um
-	  array dinamico. Assim calculo um array com base no nr máximo de digitos
-	  que um inteiro pode ter (10) + tamanho do caminho (25) + '\0' (1) = 36
-	*/
-	char name[36]; //int max value = +2147483647
+	//nr máximo de digitos que um inteiro pode ter (10) +
+	//tamanho do caminho (7) +
+	//mainNamedPipeName (???) +
+	// '\0' (1) = ???
+
+	//(OLD) char name[18]; //int max value = +2147483647 (10 digitos)
+
+	//There's no problem using strlen here, because "commonSettings.mainNamedPipeName" is always terminated with '\0'
+	char* name = (char*) malloc((10+7+strlen(commonSettings.mainNamedPipeName)+1)*sizeof(char));
 
 	mkdir(MEDIT_INTERACTION_NAMED_PIPE_PATH, 0700);
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
+		sprintf(name, "%s%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, commonSettings.mainNamedPipeName, i);
+		//(OLD) sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
 		mkfifo(name, 0600);
 	}
+	free(name);
 }
 
 void* MainNamedPipeThread(void* tArgs){
@@ -458,7 +462,6 @@ void* MainNamedPipeThread(void* tArgs){
 
 		InteractWithNamedPipe(O_WRONLY, args.mainNamedPipeName, &respServ, sizeof(int));
 		
-
 		/* -> FOR TEST PURPOSES ONLY <- */
 		
 		for(int i = 0; i < 3; i++)
@@ -471,7 +474,7 @@ void* MainNamedPipeThread(void* tArgs){
 		mvwprintw(args.threadEventsWindow, 6,1, "dbFilename: %s", args.dbFilename);
 		mvwprintw(args.threadEventsWindow, 7,1, "strlen(Username): %d", strlen(username));
 		wrefresh(args.threadEventsWindow);
-		 */
+		*/
 		/* -> FOR TEST PURPOSES ONLY <- */
 	}
 }
@@ -513,12 +516,13 @@ void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 
 void DeleteInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Ver comment em InitInteractionNamedPipes(...)
-	char name[36];
+	char* name = (char*) malloc((10+7+strlen(commonSettings.mainNamedPipeName)+1)*sizeof(char));
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
+		sprintf(name, "%s%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, commonSettings.mainNamedPipeName, i);
 		unlink(name);
 	}
+	free(name);
 	rmdir(MEDIT_INTERACTION_NAMED_PIPE_PATH);
 }
 
