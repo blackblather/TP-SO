@@ -2,7 +2,8 @@
 #define MEDIT_USERNAME_MAXLENGHT 8
 #define MEDIT_MAIN_NAMED_PIPE_NAME "../mainNamedPipe"	//Nome do named pipe pricipal
 #define MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME "mainNamedPipeSemaphore"
-#define MEDIT_INTERACTION_NAMED_PIPE_PATH "../inp/"		//"inp" stands for "interaction namedpipe"
+#define MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH "../inp/"				//"inp" stands for "interaction namedpipe"
+#define MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH "server_"		//"inp" stands for "interaction namedpipe"
 typedef struct CommonSettingsStruct{
 	int maxLines, maxColumns;
 	char *mainNamedPipeName;

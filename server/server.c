@@ -26,7 +26,7 @@ sem_t* interprocMutex;
 	 * nr máximo de digitos que um inteiro pode ter (10) +
 	 * '/' (1)
 	 * '\0' (1) = 26*/
-char interactionNamedPipeDirName[25];
+char serverSpecificInteractionNamedPipeDirName[25];
 
 void PrintLogo(){
 	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Server%20
@@ -402,26 +402,32 @@ No processo de validação, mais nenhuma thread pode mexer no array loggedInUser
 */
 void ValidateClientInfo(ClientInfo newClientInfo, int* respServ, int nrOfInteractionNamedPipes){
 	pthread_mutex_lock(&mutex_loggedInUsers);
-
 	//Critical section
 	int pos = GetLoggedInUserPositionByPID(newClientInfo.PID, args.maxUsers);
 	if(usersCount < args.maxUsers &&
 			(newClientInfo.username[0] == 0 ||
-			UsernameHasValidLenght(newClientInfo.username) == 0 ||
-			UserExists(args.dbFilename, newClientInfo.username) == 0 ||
-			UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 1) &&
+			 UsernameHasValidLenght(newClientInfo.username) == 0 ||
+			 UserExists(args.dbFilename, newClientInfo.username) == 0 ||
+			 UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 1) &&
 		pos == -1){
 		/*
-		 * If there's space AND (the username is empty OR
-		 * has an invalid lenght OR does not exist in the DB) AND
+		 * If there's space AND
+		 *			(the username is empty OR
+		 *			 has an invalid lenght OR
+		 *			 does not exist in the DB OR
+		 *			 the inserted username is already logged in) AND
 		 * the client's PID is not registered, then reseve it
 		 */
 		ReserveLoggedInUserSlot(newClientInfo.PID, args.maxUsers);
 		usersCount++;
 	} else if(UsernameHasValidLenght(newClientInfo.username) && UserExists(args.dbFilename, newClientInfo.username) && UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 0){
-		//If the username has a valid lenght AND exists in the DB AND is not currently logged in
+		/*
+		 * ELSE If the username has a valid lenght AND
+		 * exists in the DB AND
+		 * is not currently logged in
+		 */
 		if(pos >= 0){
-			//If the user register his PID before
+			//If the user registered his PID before
 			(*respServ) = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes);
 			LogUserInPOS(newClientInfo, pos, (*respServ));
 		} else if(usersCount < args.maxUsers){
@@ -432,47 +438,7 @@ void ValidateClientInfo(ClientInfo newClientInfo, int* respServ, int nrOfInterac
 		}
 	}
 	//End critical section
-
 	pthread_mutex_unlock(&mutex_loggedInUsers);
-}
-
-void CreateInteractionNamedPipeDir(){
-	//Interaction namedpipe dir name starts from "server_1" to "server_2" and "server_3" and so on
-	if(DirectoryExists(interactionNamedPipeDirName) == 0)
-		mkdir(MEDIT_INTERACTION_NAMED_PIPE_PATH, 0700);
-
-	int i = 1;
-	do{
-		sprintf(interactionNamedPipeDirName, "%sserver_%d/", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
-		i++;
-	}while(DirectoryExists(interactionNamedPipeDirName) == 1);
-	mkdir(interactionNamedPipeDirName, 0700);
-}
-
-void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
-	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
-
-	/* VAR: name
-	 *     VAR: dirname (global var)
-	 *     tamanho do caminho (14) +
-	 *     nr máximo de digitos que um inteiro pode ter (10) +
-	 *     '/' (1) +
-	 * nr máximo de digitos que um inteiro pode ter (10) +
-	 * '\0' (1) = 36 */
-
-	//(OLD) char name[18]; //int max value = +2147483647 (10 digitos)
-
-	char name[36];
-	
-	CreateInteractionNamedPipeDir();
-
-	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
-		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", interactionNamedPipeDirName, i);
-
-		//(OLD) sprintf(name, "%s%d", MEDIT_INTERACTION_NAMED_PIPE_PATH, i);
-		mkfifo(name, 0600);
-	}
 }
 
 void* MainNamedPipeThread(void* tArgs){
@@ -485,7 +451,7 @@ void* MainNamedPipeThread(void* tArgs){
 
 	mvwprintw(args.threadEventsWindow,2,1, "Main namedpipe created: %s", args.mainNamedPipeName);
 	mvwprintw(args.threadEventsWindow, 3,1, "Waiting for clients...");
-	mvwprintw(args.threadEventsWindow, 4,1, "%s", interactionNamedPipeDirName);
+	mvwprintw(args.threadEventsWindow, 4,1, "%s", serverSpecificInteractionNamedPipeDirName);
 	wrefresh(args.threadEventsWindow);
 
 	int fd;
@@ -529,6 +495,7 @@ void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeNam
 
 	int rc = pthread_create(&thread, NULL, MainNamedPipeThread, (void *)&args);
   	if (rc){
+  		endwin();
     	printf("ERROR; return code from pthread_create() is %d\n", rc);
     	exit(-1);
   	}
@@ -539,6 +506,47 @@ void SignalAllLoggedInUsers(int signum, int maxUsers){
 	for(int i = 0; i < maxUsers; i++)
 		if(loggedInUsers[i].username[0] != 0 || loggedInUsers[i].isUsed == 1)
 			kill(loggedInUsers[i].PID, signum);
+}
+
+void CreateInteractionNamedPipeDir(){
+	//Interaction namedpipe dir name starts from "server_1" to "server_2" and "server_3" and so on
+	if(DirectoryExists(serverSpecificInteractionNamedPipeDirName) == 0)
+		mkdir(MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 0700);
+
+	int i = 1;
+	do{
+		sprintf(serverSpecificInteractionNamedPipeDirName, "%s%s%d/", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
+															MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH,
+															i);
+		i++;
+	}while(DirectoryExists(serverSpecificInteractionNamedPipeDirName) == 1);
+	mkdir(serverSpecificInteractionNamedPipeDirName, 0700);
+}
+
+void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
+	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
+
+	/* VAR: name
+	 *     VAR: serverSpecificInteractionNamedPipeDirName (global var)
+	 *     tamanho do caminho (14) +
+	 *     nr máximo de digitos que um inteiro pode ter (10) +
+	 *     '/' (1) +
+	 * nr máximo de digitos que um inteiro pode ter (10) +
+	 * '\0' (1) = 36 */
+
+	//(OLD) char name[18]; //int max value = +2147483647 (10 digitos)
+
+	char name[36];
+	
+	CreateInteractionNamedPipeDir();
+
+	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
+		memset(name, 0, sizeof(name));
+		sprintf(name, "%s%d", serverSpecificInteractionNamedPipeDirName, i);
+
+		//(OLD) sprintf(name, "%s%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, i);
+		mkfifo(name, 0600);
+	}
 }
 
 void FreeAllocatedScreenMemory(Screen *screen, CommonSettings commonSettings){
@@ -557,11 +565,13 @@ void DeleteInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	char name[36];
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", interactionNamedPipeDirName, i);
+		sprintf(name, "%s%d", serverSpecificInteractionNamedPipeDirName, i);
 		unlink(name);
 	}
-	rmdir(interactionNamedPipeDirName);
-	rmdir(MEDIT_INTERACTION_NAMED_PIPE_PATH);
+	//remove server specific "../inp/server_x" folder
+	rmdir(serverSpecificInteractionNamedPipeDirName);
+	//if "../inp/" is empty, delete it (only deletes it after the last server shutsdown)
+	rmdir(MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH);
 }
 
 void Shutdown(){
@@ -625,9 +635,13 @@ int main(int argc, char* const argv[]){
 	return 0;
 }
 //COMPILE WITH: gcc server.c -o server -lncurses -lpthread -lrt
+
 //NOTAS PARA INCLUIR NO RELATÓRIO DA META 3:
 /*
  * -> O login tinha um bug. Quando se iniciava um cliente com o parâmetro -p e um username que ja tivesse login feito,
  *    esse cliente não ficava com um espaço reservado no servidor. (fixed)
- * -> 
+ *
+ * -> o namedpipe principal pode ser criado em qqr localização do pc, visto
+ *    ser o utilizador quem define o caminho do mesmo, o mesmo não se verifica
+ *    nos namedpipes de interação, uma vez que são apenas definidos pelo servidor
  */

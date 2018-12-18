@@ -44,13 +44,20 @@ void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int s
 }
 
 void WriteReadNamedpipe(char* semName, int oflag, char* namedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
-	interprocMutex = sem_open(semName, oflag);
-	sem_wait(interprocMutex);
-		//Critical section
-		InteractWithNamedPipe(O_WRONLY, namedPipeName, writeVal, writeValSize);
-		InteractWithNamedPipe(O_RDONLY, namedPipeName, readVal, readValSize);
-		//End critical section
-	sem_post(interprocMutex);
+	//Este if + switch podiam ser ignorados, porque o sem_open() ignora os ultimos 2 params caso o semaforo ja exista
+	//Apenas cá estão para o código ser um pouco mais legível
+	if(oflag == O_EXCL || oflag == O_CREAT){
+		switch(oflag){
+			case O_EXCL: interprocMutex = sem_open(semName, oflag); break;
+			case O_CREAT: interprocMutex = sem_open(semName, oflag, 0600, 1); break;
+		}
+		sem_wait(interprocMutex);
+			//Critical section
+			InteractWithNamedPipe(O_WRONLY, namedPipeName, writeVal, writeValSize);
+			InteractWithNamedPipe(O_RDONLY, namedPipeName, readVal, readValSize);
+			//End critical section
+		sem_post(interprocMutex);
+	}
 }
 
 int IsValidChar(int ch){
