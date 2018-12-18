@@ -26,7 +26,8 @@ sem_t* interprocMutex;
 	 * nr máximo de digitos que um inteiro pode ter (10) +
 	 * '/' (1)
 	 * '\0' (1) = 26*/
-char serverSpecificInteractionNamedPipeDirName[25];
+char serverSpecificInteractionNamedPipeDirName[26];
+interactionNamedPipeInfo respServ;
 
 void PrintLogo(){
 	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Server%20
@@ -78,8 +79,8 @@ WINDOW *create_newwin(int height, int width, int starty, int startx){	//Source: 
 
 	window = newwin(height, width, starty, startx);
 	box(window, '|' , '-');		/* 0, 0 gives default characters 
-					 * for the vertical and horizontal
-					 * lines			*/
+								 * for the vertical and horizontal
+								 * lines			*/
 	wborder(window, '|', '|', '-', '-', '+', '+', '+', '+');
 	//wrefresh(window);		/* Show that box 		*/
 
@@ -400,7 +401,7 @@ int GetBestInteractionNamedPipeIndex(int nrOfInteractionNamedPipes){
 Validates client info, and places new clients on the list to save their PIDs
 No processo de validação, mais nenhuma thread pode mexer no array loggedInUsers
 */
-void ValidateClientInfo(ClientInfo newClientInfo, int* respServ, int nrOfInteractionNamedPipes){
+void ValidateClientInfo(ClientInfo newClientInfo, int nrOfInteractionNamedPipes){
 	pthread_mutex_lock(&mutex_loggedInUsers);
 	//Critical section
 	int pos = GetLoggedInUserPositionByPID(newClientInfo.PID, args.maxUsers);
@@ -428,12 +429,12 @@ void ValidateClientInfo(ClientInfo newClientInfo, int* respServ, int nrOfInterac
 		 */
 		if(pos >= 0){
 			//If the user registered his PID before
-			(*respServ) = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes);
-			LogUserInPOS(newClientInfo, pos, (*respServ));
+			respServ.INPIndex = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes);
+			LogUserInPOS(newClientInfo, pos, respServ.INPIndex);
 		} else if(usersCount < args.maxUsers){
 			//If the user DIDN'T register his PID before (ex: ./client -u username)
-			(*respServ) = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes);
-			LogUserIn(newClientInfo, args.maxUsers, (*respServ));
+			respServ.INPIndex = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes);
+			LogUserIn(newClientInfo, args.maxUsers, respServ.INPIndex);
 			usersCount++;
 		}
 	}
@@ -455,21 +456,21 @@ void* MainNamedPipeThread(void* tArgs){
 	wrefresh(args.threadEventsWindow);
 
 	int fd;
-	int respServ;
+	
 	ClientInfo newClientInfo;
 	while(1){
-		respServ = -1;
+		respServ.INPIndex = -1;
 
 		InteractWithNamedPipe(O_RDONLY, args.mainNamedPipeName, &newClientInfo, sizeof(newClientInfo));
 
-		ValidateClientInfo(newClientInfo, &respServ, args.nrOfInteractionNamedPipes);
+		ValidateClientInfo(newClientInfo, args.nrOfInteractionNamedPipes);
 
-		InteractWithNamedPipe(O_WRONLY, args.mainNamedPipeName, &respServ, sizeof(int));
+		InteractWithNamedPipe(O_WRONLY, args.mainNamedPipeName, &respServ, sizeof(interactionNamedPipeInfo));
 		
 		/* -> FOR TEST PURPOSES ONLY <- */
 		
 		for(int i = 0; i < 3; i++)
-			mvwprintw(args.threadEventsWindow, 4+i,1, "[%d] username: %s, PID: %d, isUsed: %d, indexINP: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed, loggedInUsers[i].interactionNamedPipeIndex);
+			mvwprintw(args.threadEventsWindow, 5+i,1, "[%d] username: %s, PID: %d, isUsed: %d, indexINP: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed, loggedInUsers[i].interactionNamedPipeIndex);
 		wrefresh(args.threadEventsWindow);
 		 
 		/*
@@ -513,12 +514,13 @@ void CreateInteractionNamedPipeDir(){
 	if(DirectoryExists(serverSpecificInteractionNamedPipeDirName) == 0)
 		mkdir(MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 0700);
 
-	int i = 1;
+	//global var, used in comunication through main namedpipe
+	respServ.INPServerSpecificFolderIndex = -1;
 	do{
+		respServ.INPServerSpecificFolderIndex++;
 		sprintf(serverSpecificInteractionNamedPipeDirName, "%s%s%d/", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
 															MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH,
-															i);
-		i++;
+															respServ.INPServerSpecificFolderIndex);
 	}while(DirectoryExists(serverSpecificInteractionNamedPipeDirName) == 1);
 	mkdir(serverSpecificInteractionNamedPipeDirName, 0700);
 }

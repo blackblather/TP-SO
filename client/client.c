@@ -12,6 +12,8 @@
 #include "client-defaults.h"
 
 sem_t* interprocMutex;
+interactionNamedPipeInfo respServ;
+char interactionNamedPipe[36];
 
 void PrintLogo(){
 	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Client%20
@@ -75,9 +77,10 @@ int IsEmptyOrSpaceChar(int ch){
 }
 
 int CantLogin(char* mainNamedPipeName, ClientInfo* clientInfo){
-	int respServ = -1;
-	WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(int));
-	if(respServ == -1)
+	//int respServ = -1;
+	respServ.INPIndex = -1;
+	WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(interactionNamedPipeInfo));
+	if(respServ.INPIndex == -1)
 		return 1;
 	return 0;
 }
@@ -215,8 +218,18 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 	}while(ch != 27);
 }
 
+void SetInteractionNamedPipePath(){
+	sprintf(interactionNamedPipe, "%s%s%d/%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
+											 MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH,
+											 respServ.INPServerSpecificFolderIndex,
+											 respServ.INPIndex);
+
+}
+
 void InitTextEditor(char *username, CommonSettings commonSettings){
 	//Quando chega aqui, o utilizador já fez login
+	SetInteractionNamedPipePath();
+	mvprintw(5,5, "%s", interactionNamedPipe);
 	PrintLineNrs(commonSettings.maxLines);
 
 	//recebe estrutura de como estão as coisas neste momento e imprime estrutura (tudo tem que bloquear até

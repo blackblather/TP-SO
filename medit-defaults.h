@@ -14,3 +14,7 @@ typedef struct ClientInfoStruct{
 	int isUsed,
 	interactionNamedPipeIndex;
 } ClientInfo;
+typedef struct interactionNamedPipeInfoStruct{
+	int INPIndex;
+	int INPServerSpecificFolderIndex;
+} interactionNamedPipeInfo;
