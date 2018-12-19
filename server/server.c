@@ -503,6 +503,10 @@ void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeNam
   	//pthread_exit(NULL);
 }
 
+void StartThreads(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes){
+	StartMainNamedPipeThread(threadEventsWindow, mainNamedPipeName, dbFilename, maxUsers, nrOfInteractionNamedPipes);
+}
+
 void SignalAllLoggedInUsers(int signum, int maxUsers){
 	for(int i = 0; i < maxUsers; i++)
 		if(loggedInUsers[i].username[0] != 0 || loggedInUsers[i].isUsed == 1)
@@ -619,7 +623,7 @@ int main(int argc, char* const argv[]){
 		
 		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
 		InitInteractionNamedPipes(serverSettings.nrOfInteractionNamedPipes);
-		StartMainNamedPipeThread(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers, serverSettings.nrOfInteractionNamedPipes);
+		StartThreads(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers, serverSettings.nrOfInteractionNamedPipes);
 
 		do{
 			mvwprintw(window[3], 1, 1, "Command: ");
