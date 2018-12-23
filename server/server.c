@@ -515,7 +515,7 @@ void SignalAllLoggedInUsers(int signum, int maxUsers){
 
 void CreateInteractionNamedPipeDir(){
 	//Interaction namedpipe dir name starts from "server_1" to "server_2" and "server_3" and so on
-	if(DirectoryExists(serverSpecificInteractionNamedPipeDirName) == 0)
+	if(DirectoryExists(MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH) == 0)
 		mkdir(MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 0700);
 
 	//global var, used in comunication through main namedpipe
@@ -548,7 +548,9 @@ void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
 
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", serverSpecificInteractionNamedPipeDirName, i);
+		//namedpipes started with "s" are the "interaction namedpipes" in the enunciado cyka blyat
+		//After meeting with the teacher, i decided to use those namedpipes to recieve the chars from the clients (and the logout requests)
+		sprintf(name, "%ss%d", serverSpecificInteractionNamedPipeDirName, i);
 
 		//(OLD) sprintf(name, "%s%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, i);
 		mkfifo(name, 0600);
@@ -571,7 +573,7 @@ void DeleteInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	char name[36];
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
-		sprintf(name, "%s%d", serverSpecificInteractionNamedPipeDirName, i);
+		sprintf(name, "%ss%d", serverSpecificInteractionNamedPipeDirName, i);
 		unlink(name);
 	}
 	//remove server specific "../inp/server_x" folder

@@ -95,7 +95,6 @@ void AskUsernameWhileNotLoggedIn(char* mainNamedPipeName, ClientInfo* clientInfo
 	}
 }
 
-
 void UpdateUsername(char *username, char* val) {
 	strncpy(username, val, MEDIT_USERNAME_MAXLENGHT);
 }
@@ -219,11 +218,15 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 }
 
 void SetInteractionNamedPipePath(){
-	sprintf(interactionNamedPipe, "%s%s%d/%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
+	sprintf(interactionNamedPipe, "%s%s%d/s%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
 											 MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH,
 											 respServ.INPServerSpecificFolderIndex,
 											 respServ.INPIndex);
 
+}
+
+void InitClientNamedPipe(){
+	
 }
 
 void InitTextEditor(char *username, CommonSettings commonSettings){
