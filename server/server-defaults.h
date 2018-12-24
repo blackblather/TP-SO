@@ -32,3 +32,8 @@ typedef struct MainNamedPipeThreadArgsStruct{
 		nrOfInteractionNamedPipes;
 	WINDOW* threadEventsWindow;
 } MainNamedPipeThreadArgs;
+
+typedef struct InteractionNamedPipeThreadArgsStruct{
+	int maxUsers;
+	WINDOW* threadEventsWindow;
+} InteractionNamedPipeThreadArgs;
