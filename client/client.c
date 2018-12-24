@@ -13,7 +13,17 @@
 
 sem_t* interprocMutex;
 interactionNamedPipeInfo respServ;
-char interactionNamedPipe[36];
+char interactionNamedPipe[37];
+/* VAR: clientNamedPipe:
+ *   tamanho do caminho (14) +
+ *   nr máximo de digitos que um inteiro pode ter (10) +
+ *	 '/' (1) +
+ *	 'c' (1) +
+ *   nr máximo de digitos que um inteiro pode ter (10) +
+ *   '\0' (1) = 37 */
+char clientNamedPipe[37];
+int clientNamedPipeIndex;
+ClientNamedPipeInfo rArgs;
 
 void PrintLogo(){
 	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Client%20
@@ -25,6 +35,12 @@ void PrintLogo(){
 	mvprintw(8,9,"/ /\\/\\ \\|  __/| (_| || || |_  / /___ | || ||  __/| | | || |_  ");
 	mvprintw(9,9,"\\/    \\/ \\___| \\__,_||_| \\__| \\____/ |_||_| \\___||_| |_| \\__| ");
 	mvprintw(10,9,"--------------------------------------------------------------");
+}
+
+int FileExists(char* filename){
+	if(access( filename, F_OK ) != -1)
+		return 1;
+	return 0;
 }
 
 int ServerIsRunningOnNamedPipe(char* mainNamedPipeName){
@@ -45,7 +61,7 @@ void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int s
 		}
 }
 
-void WriteReadNamedpipe(char* semName, int oflag, char* namedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
+/*void WriteReadNamedpipe(char* semName, int oflag, char* namedPipeName, void* writeVal, int writeValSize, void* readVal, int readValSize){
 	//Este if + switch podiam ser ignorados, porque o sem_open() ignora os ultimos 2 params caso o semaforo ja exista
 	//Apenas cá estão para o código ser um pouco mais legível
 	if(oflag == O_EXCL || oflag == O_CREAT){
@@ -60,7 +76,7 @@ void WriteReadNamedpipe(char* semName, int oflag, char* namedPipeName, void* wri
 			//End critical section
 		sem_post(interprocMutex);
 	}
-}
+}*/
 
 int IsValidChar(int ch){
 	//Source: https://theasciicode.com.ar/ascii-control-characters/null-character-ascii-code-0.html
@@ -76,13 +92,47 @@ int IsEmptyOrSpaceChar(int ch){
 	return 0;
 }
 
+void SetInteractionNamedPipePath(){
+	sprintf(interactionNamedPipe, "%s%s%d/s%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
+											 	MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH,
+											 	respServ.INPServerSpecificFolderIndex,
+											 	respServ.INPIndex);
+}
+
+void InitClientNamedPipe(){
+	clientNamedPipeIndex = -1;
+	do{
+		clientNamedPipeIndex++;
+		sprintf(clientNamedPipe, "%s%s%d/c%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
+											   MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH,
+											   respServ.INPServerSpecificFolderIndex,
+											   clientNamedPipeIndex);
+	}while(FileExists(clientNamedPipe) == 1);
+	mkfifo(clientNamedPipe, 0600);
+}
+
 int CantLogin(char* mainNamedPipeName, ClientInfo* clientInfo){
 	//int respServ = -1;
 	respServ.INPIndex = -1;
-	WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(interactionNamedPipeInfo));
-	if(respServ.INPIndex == -1)
+	//WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(interactionNamedPipeInfo));
+	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL);
+	sem_wait(interprocMutex);
+		//Critical section
+		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, clientInfo, sizeof((*clientInfo)));
+		InteractWithNamedPipe(O_RDONLY, mainNamedPipeName, &respServ, sizeof(interactionNamedPipeInfo));
+		SetInteractionNamedPipePath();
+
+	if(respServ.INPIndex == -1){
+		//End critical section (fail login case)
+		sem_post(interprocMutex);
 		return 1;
-	return 0;
+	} else {
+		InitClientNamedPipe();
+		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, &clientNamedPipeIndex, sizeof(int));
+		//End critical section (successful login case)
+		sem_post(interprocMutex);
+		return 0;
+	}
 }
 
 void AskUsernameWhileNotLoggedIn(char* mainNamedPipeName, ClientInfo* clientInfo){
@@ -109,8 +159,6 @@ void InitFromOpts(int argc, char* const argv[], char *username, char **mainNamed
 	int c;
 	while ((c = getopt(argc, argv, "u:p:")) != -1){
 	    switch (c){
-	      /*case 'u': UpdateUsername(username, optarg); break;
-	      case 'p':	UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;*/
 	    	case 'u': UpdateUsername(username, optarg); break;
 	      	case 'p': UpdateMainNamedPipeName(mainNamedPipeName, optarg); break;
 	    }
@@ -122,7 +170,7 @@ void PrintLineNrs(int maxLinesTMP){
 		mvprintw(i, 0, "%2d:", i);
 }
 
-void EnterLineEditMode(int posY, int maxColumns, int offset){
+void EnterLineEditMode(int posY, int maxColumns, int offset, char* mainNamedPipeName){
 	//Source #1: Exemplo NCURSES 1 -> Moodle
 	//Source #2: Exemplo NCURSES 2 -> Moodle
 	//Source #3: https://www.gnu.org/software/guile-ncurses/manual/html_node/Getting-characters-from-the-keyboard.html
@@ -173,7 +221,7 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 	//Posiciona o cursor no inicio da linha
 	move(posY, posX);
 	refresh();
-
+	int i = 0;
 	do{
 		ch = getch();
 		switch(ch){
@@ -199,6 +247,7 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 					lastLineChar = (int) mvinch(posY, maxColumns-1);
 					if(IsValidChar(ch) && ((posX+1) <= maxColumns) &&
 				       IsValidChar(lastLineChar) && IsEmptyOrSpaceChar(lastLineChar)){
+				       	//IS VALID CHAR
 						int auxCh, auxCh2;
 						auxCh = mvinch(posY, posX);
 						mvprintw(posY, posX, "%c", ch);
@@ -208,42 +257,61 @@ void EnterLineEditMode(int posY, int maxColumns, int offset){
 							auxCh = auxCh2;
 						}
 						posX++;
+						//TESTING WRITING CHARS TO ALL CLIENTS
+							sem_wait(interprocMutex);
+							InteractWithNamedPipe(O_WRONLY, interactionNamedPipe, &ch, sizeof(int));
+							sem_post(interprocMutex);
+						//END TEST
 					}
 				}
 			}break;
 		}	
 		move(posY, posX);
 		refresh();
+		i++;
 	}while(ch != 27);
 }
 
-void SetInteractionNamedPipePath(){
-	sprintf(interactionNamedPipe, "%s%s%d/s%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
-											 MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH,
-											 respServ.INPServerSpecificFolderIndex,
-											 respServ.INPIndex);
-
+void* ReadingThread(void* tArgs){
+	ClientNamedPipeInfo tRArgs;	//tRArgs = thread "Reading" Arguments
+	tRArgs = *(ClientNamedPipeInfo*) tArgs;
+	char inputChar;
+	while(1){
+		InteractWithNamedPipe(O_RDONLY, tRArgs.clientNamedPipe, &inputChar, sizeof(char));
+		mvprintw(14,13, "%c", inputChar);
+		refresh();
+	}
 }
 
-void InitClientNamedPipe(){
-	
+void StartReadingThread(){
+	//rArgs -> global var (para não ser criada na thread "principal")
+	rArgs.clientNamedPipe = clientNamedPipe;
+
+	pthread_t readingThread;
+
+	int rc = pthread_create(&readingThread, NULL, ReadingThread, (void *)&rArgs);
+  	if (rc){
+  		endwin();
+    	printf("ERROR; return code from pthread_create(&interactionNamedPipeThread, [...]) is %d\n", rc);
+    	exit(-1);
+  	}
 }
 
 void InitTextEditor(char *username, CommonSettings commonSettings){
 	//Quando chega aqui, o utilizador já fez login
-	SetInteractionNamedPipePath();
-	mvprintw(5,5, "%s", interactionNamedPipe);
 	PrintLineNrs(commonSettings.maxLines);
-
-	//recebe estrutura de como estão as coisas neste momento e imprime estrutura (tudo tem que bloquear até
-	//ter carregado as coisas todas, para nao haver conflitos)
-
-	//inicia thread de receber chars do servidor (podia implementar uma espécie de pilha FILO (lista ligada com
-	//ponteiro para a ultima posição, e cada item aponta para a anterior) que armazena tudo o que é Chars a imprimir)1
-
-	//entra em modo de "navegação livre"
-	EnterLineEditMode(0, commonSettings.maxColumns, 3);
+	StartReadingThread();
+	/* TODO LIST:
+	 * (1) -> recebe estrutura de como estão as coisas neste momento e imprime estrutura (tudo tem que bloquear até
+	 * ter carregado as coisas todas, para nao haver conflitos)
+	 *
+	 * (2) -> inicia thread de receber chars do servidor (podia implementar uma espécie de pilha FILO (lista ligada com
+	 * ponteiro para a ultima posição, e cada item aponta para a anterior) que armazena tudo o que é Chars a imprimir)1
+	 *
+	 * (3) -> entra em modo de "navegação livre"
+	 *******************************************/
 	//quando o user clica "Enter", se a linha estiver livre, entra no modo de edição dessa linha
+	EnterLineEditMode(0, commonSettings.maxColumns, 3, commonSettings.mainNamedPipeName);
 }
 
 void InitCommonSettingsStruct(CommonSettings* commonSettings){

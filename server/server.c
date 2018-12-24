@@ -16,16 +16,17 @@ CommonSettings commonSettings;	//Global por causa da função Shutdown(), usada 
 ServerSettings serverSettings;	//Global por causa da função Shutdown(), usada ao chamar o SIGINT
 Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
 Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
-MainNamedPipeThreadArgs args;
+MainNamedPipeThreadArgs mArgs;
+InteractionNamedPipeThreadArgs iArgs;
 ClientInfo* loggedInUsers;
 int usersCount = 0;
 pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
-/* VAR: dirname
-	 * tamanho do caminho (14) +
-	 * nr máximo de digitos que um inteiro pode ter (10) +
-	 * '/' (1)
-	 * '\0' (1) = 26*/
+/* VAR: serverSpecificInteractionNamedPipeDirName
+ * tamanho do caminho (14) +
+ * nr máximo de digitos que um inteiro pode ter (10) +
+ * '/' (1)
+ * '\0' (1) = 26*/
 char serverSpecificInteractionNamedPipeDirName[26];
 interactionNamedPipeInfo respServ;
 
@@ -330,6 +331,7 @@ void InitEmptyLoggedInUsersArray(int maxUsers){
 		//loggedInUsers[i].PID = -1; //-> pid_t is an unsigned int, default value is 0, but im affrain 0 is a real PID
 		loggedInUsers[i].isUsed = 0;
 		loggedInUsers[i].interactionNamedPipeIndex = -1;
+		loggedInUsers[i].clientNamedPipeIndex = -1;
 	}
 }
 
@@ -347,12 +349,13 @@ void LogUserInPOS(ClientInfo newClientInfo, int pos, int interactionNamedPipeInd
 	loggedInUsers[pos].interactionNamedPipeIndex = interactionNamedPipeIndex;
 }
 
-void LogUserIn(ClientInfo newClientInfo, int maxUsers, int interactionNamedPipeIndex){
+int LogUserIn(ClientInfo newClientInfo, int maxUsers, int interactionNamedPipeIndex){
 	for(int i = 0; i < maxUsers; i++)
 		if(loggedInUsers[i].username[0] == 0 && loggedInUsers[i].isUsed == 0){
 			LogUserInPOS(newClientInfo, i, interactionNamedPipeIndex);
-			return;
+			return i;
 		}
+	return -1;
 }
 
 int GetLoggedInUserPositionByPID(int PID, int maxUsers){
@@ -378,14 +381,14 @@ void InitEmptyNamedPipeUsersCountArray(int** namedPipeUsersCount, int nrOfIntera
 		(*namedPipeUsersCount)[i] = 0;
 }
 
-int GetBestInteractionNamedPipeIndex(int nrOfInteractionNamedPipes){
+int GetBestInteractionNamedPipeIndex(int nrOfInteractionNamedPipes, int maxUsers){
 	//Array com numero de clientes por namedpipe de interação
 	int minIndex = 0;
 	int* namedPipeUsersCount;
 
 	InitEmptyNamedPipeUsersCountArray(&namedPipeUsersCount, nrOfInteractionNamedPipes);
 
-	for(int i = 0; i < args.maxUsers; i++)
+	for(int i = 0; i < maxUsers; i++)
 		if(loggedInUsers[i].interactionNamedPipeIndex > -1)
 			namedPipeUsersCount[loggedInUsers[i].interactionNamedPipeIndex]++;
 
@@ -401,15 +404,15 @@ int GetBestInteractionNamedPipeIndex(int nrOfInteractionNamedPipes){
 Validates client info, and places new clients on the list to save their PIDs
 No processo de validação, mais nenhuma thread pode mexer no array loggedInUsers
 */
-void ValidateClientInfo(ClientInfo newClientInfo, int nrOfInteractionNamedPipes){
+int ValidateClientInfo(ClientInfo newClientInfo, int nrOfInteractionNamedPipes, int maxUsers, char* dbFilename){
 	pthread_mutex_lock(&mutex_loggedInUsers);
 	//Critical section
-	int pos = GetLoggedInUserPositionByPID(newClientInfo.PID, args.maxUsers);
-	if(usersCount < args.maxUsers &&
+	int pos = GetLoggedInUserPositionByPID(newClientInfo.PID, maxUsers);
+	if(usersCount < maxUsers &&
 			(newClientInfo.username[0] == 0 ||
 			 UsernameHasValidLenght(newClientInfo.username) == 0 ||
-			 UserExists(args.dbFilename, newClientInfo.username) == 0 ||
-			 UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 1) &&
+			 UserExists(dbFilename, newClientInfo.username) == 0 ||
+			 UserIsLoggedIn(newClientInfo.username, maxUsers) == 1) &&
 		pos == -1){
 		/*
 		 * If there's space AND
@@ -417,87 +420,138 @@ void ValidateClientInfo(ClientInfo newClientInfo, int nrOfInteractionNamedPipes)
 		 *			 has an invalid lenght OR
 		 *			 does not exist in the DB OR
 		 *			 the inserted username is already logged in) AND
-		 * the client's PID is not registered, then reseve it
+		 * the client's PID is not registered, THEN reseve it
 		 */
-		ReserveLoggedInUserSlot(newClientInfo.PID, args.maxUsers);
+		ReserveLoggedInUserSlot(newClientInfo.PID, maxUsers);
 		usersCount++;
-	} else if(UsernameHasValidLenght(newClientInfo.username) && UserExists(args.dbFilename, newClientInfo.username) && UserIsLoggedIn(newClientInfo.username, args.maxUsers) == 0){
+	} else if(UsernameHasValidLenght(newClientInfo.username) && UserExists(dbFilename, newClientInfo.username) && UserIsLoggedIn(newClientInfo.username, maxUsers) == 0){
 		/*
 		 * ELSE If the username has a valid lenght AND
 		 * exists in the DB AND
 		 * is not currently logged in
 		 */
 		if(pos >= 0){
-			//If the user registered his PID before
-			respServ.INPIndex = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes);
+			//If the user DID register his PID before (no need to increment maxusers for that user)
+			respServ.INPIndex = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes, maxUsers);
 			LogUserInPOS(newClientInfo, pos, respServ.INPIndex);
-		} else if(usersCount < args.maxUsers){
-			//If the user DIDN'T register his PID before (ex: ./client -u username)
-			respServ.INPIndex = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes);
-			LogUserIn(newClientInfo, args.maxUsers, respServ.INPIndex);
+		} else if(usersCount < maxUsers){
+			//If the user DIDN'T register his PID before (ex: ./client -u [username])
+			respServ.INPIndex = GetBestInteractionNamedPipeIndex(nrOfInteractionNamedPipes, maxUsers);
+			pos = LogUserIn(newClientInfo, maxUsers, respServ.INPIndex);
 			usersCount++;
 		}
 	}
 	//End critical section
 	pthread_mutex_unlock(&mutex_loggedInUsers);
+	return pos;
 }
 
 void* MainNamedPipeThread(void* tArgs){
 
-	MainNamedPipeThreadArgs args;
-	args = *(MainNamedPipeThreadArgs*) tArgs;
+	MainNamedPipeThreadArgs tMArgs;	//tMArgs = thread "Main" Arguments
+	tMArgs = *(MainNamedPipeThreadArgs*) tArgs;
 
 	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_CREAT, 0600, 1);
-	mkfifo(args.mainNamedPipeName, 0600);
+	mkfifo(tMArgs.mainNamedPipeName, 0600);
 
-	mvwprintw(args.threadEventsWindow,2,1, "Main namedpipe created: %s", args.mainNamedPipeName);
-	mvwprintw(args.threadEventsWindow, 3,1, "Waiting for clients...");
-	mvwprintw(args.threadEventsWindow, 4,1, "%s", serverSpecificInteractionNamedPipeDirName);
-	wrefresh(args.threadEventsWindow);
+	mvwprintw(tMArgs.threadEventsWindow,2,1, "Main namedpipe created: %s", tMArgs.mainNamedPipeName);
+	mvwprintw(tMArgs.threadEventsWindow, 3,1, "Waiting for clients...");
+	//mvwprintw(tMArgs.threadEventsWindow, 4,1, "%s", serverSpecificInteractionNamedPipeDirName);
+	wrefresh(tMArgs.threadEventsWindow);
 
-	int fd;
-	
+	int userPos, clientNamedPipeIndex;
 	ClientInfo newClientInfo;
+
 	while(1){
 		respServ.INPIndex = -1;
 
-		InteractWithNamedPipe(O_RDONLY, args.mainNamedPipeName, &newClientInfo, sizeof(newClientInfo));
+		InteractWithNamedPipe(O_RDONLY, tMArgs.mainNamedPipeName, &newClientInfo, sizeof(newClientInfo));
 
-		ValidateClientInfo(newClientInfo, args.nrOfInteractionNamedPipes);
+		userPos = ValidateClientInfo(newClientInfo, tMArgs.nrOfInteractionNamedPipes, tMArgs.maxUsers, tMArgs.dbFilename);
 
-		InteractWithNamedPipe(O_WRONLY, args.mainNamedPipeName, &respServ, sizeof(interactionNamedPipeInfo));
+		InteractWithNamedPipe(O_WRONLY, tMArgs.mainNamedPipeName, &respServ, sizeof(interactionNamedPipeInfo));
 		
+		if(respServ.INPIndex != -1 && userPos != -1){
+			InteractWithNamedPipe(O_RDONLY, tMArgs.mainNamedPipeName, &clientNamedPipeIndex, sizeof(int));
+			loggedInUsers[userPos].clientNamedPipeIndex = clientNamedPipeIndex;
+		}
+
 		/* -> FOR TEST PURPOSES ONLY <- */
-		
 		for(int i = 0; i < 3; i++)
-			mvwprintw(args.threadEventsWindow, 5+i,1, "[%d] username: %s, PID: %d, isUsed: %d, indexINP: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed, loggedInUsers[i].interactionNamedPipeIndex);
-		wrefresh(args.threadEventsWindow);
-		 
+			mvwprintw(tMArgs.threadEventsWindow, 5+i,1, "[%d] username: %s, PID: %d, isUsed: %d, indexINP: %d, clientNPIndex: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed, loggedInUsers[i].interactionNamedPipeIndex, loggedInUsers[i].clientNamedPipeIndex);
+		wrefresh(tMArgs.threadEventsWindow);
 		/*
-		mvwprintw(args.threadEventsWindow, 4,1, "Username: %s", username);
-		mvwprintw(args.threadEventsWindow, 5,1, "respServ: %c", respServ);
-		mvwprintw(args.threadEventsWindow, 6,1, "dbFilename: %s", args.dbFilename);
-		mvwprintw(args.threadEventsWindow, 7,1, "strlen(Username): %d", strlen(username));
-		wrefresh(args.threadEventsWindow);
+		mvwprintw(tMArgs.threadEventsWindow, 4,1, "Username: %s", username);
+		mvwprintw(tMArgs.threadEventsWindow, 5,1, "respServ: %c", respServ);
+		mvwprintw(tMArgs.threadEventsWindow, 6,1, "dbFilename: %s", tMArgs.dbFilename);
+		mvwprintw(tMArgs.threadEventsWindow, 7,1, "strlen(Username): %d", strlen(username));
+		wrefresh(tMArgs.threadEventsWindow);
 		*/
 		/* -> FOR TEST PURPOSES ONLY <- */
 	}
 }
 
 void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes){
-	//args -> global var (para não ser criada na thread "principal")
-	args.mainNamedPipeName = mainNamedPipeName;
-	args.dbFilename = dbFilename;
-	args.maxUsers = maxUsers;
-	args.nrOfInteractionNamedPipes = nrOfInteractionNamedPipes;
-	args.threadEventsWindow = threadEventsWindow;
+	//mArgs -> global var (para não ser criada na thread "principal")
+	mArgs.mainNamedPipeName = mainNamedPipeName;
+	mArgs.dbFilename = dbFilename;
+	mArgs.maxUsers = maxUsers;
+	mArgs.nrOfInteractionNamedPipes = nrOfInteractionNamedPipes;
+	mArgs.threadEventsWindow = threadEventsWindow;
 
-	pthread_t thread;
+	pthread_t mainNamedPipeThread;
 
-	int rc = pthread_create(&thread, NULL, MainNamedPipeThread, (void *)&args);
+	int rc = pthread_create(&mainNamedPipeThread, NULL, MainNamedPipeThread, (void *)&mArgs);
   	if (rc){
   		endwin();
-    	printf("ERROR; return code from pthread_create() is %d\n", rc);
+    	printf("ERROR; return code from pthread_create(&mainNamedPipeThread, [...]) is %d\n", rc);
+    	exit(-1);
+  	}
+  	//pthread_exit(NULL);
+}
+
+void* InteractionNamedPipeThread(void* tArgs){
+	InteractionNamedPipeThreadArgs tIArgs;	//tIArgs = thread "Interaction" Arguments
+	tIArgs = *(InteractionNamedPipeThreadArgs*) tArgs;
+	char clientNamedPipe[37];
+	int UmChar;
+	int i = 0;
+	while(1){
+		mvwprintw(tIArgs.threadEventsWindow, 8, 1, "Waiting input #%d", i);
+		wrefresh(tIArgs.threadEventsWindow);
+		InteractWithNamedPipe(O_RDONLY, "../inp/server_0/s0", &UmChar, sizeof(int));
+		mvwprintw(tIArgs.threadEventsWindow, 9, 1, "Li o char: %c", UmChar);
+		wrefresh(tIArgs.threadEventsWindow);
+		i++;
+		
+		pthread_mutex_lock(&mutex_loggedInUsers);
+		//Critical section
+		for(int i = 0; i != tIArgs.maxUsers; i++)
+			if(loggedInUsers[i].clientNamedPipeIndex != -1){
+				sprintf(clientNamedPipe, "%sc%d", serverSpecificInteractionNamedPipeDirName, 
+												  loggedInUsers[i].clientNamedPipeIndex);
+				InteractWithNamedPipe(O_WRONLY, clientNamedPipe, &UmChar, sizeof(char));
+				//mvwprintw(tIArgs.threadEventsWindow, 9, 1+i, "%d", i);
+				//wrefresh(tIArgs.threadEventsWindow);
+			}
+		//End critical section
+		pthread_mutex_unlock(&mutex_loggedInUsers);
+	}
+	mvwprintw(tIArgs.threadEventsWindow, 10, 1, "Saiu do while");
+	wrefresh(tIArgs.threadEventsWindow);
+}
+
+void StartInteractionNamedPipeThread(WINDOW* threadEventsWindow, int maxUsers){
+	//iArgs -> global var (para não ser criada na thread "principal")
+	iArgs.maxUsers = maxUsers;
+	iArgs.threadEventsWindow = threadEventsWindow;
+
+	pthread_t interactionNamedPipeThread;
+
+	int rc = pthread_create(&interactionNamedPipeThread, NULL, InteractionNamedPipeThread, (void *)&iArgs);
+  	if (rc){
+  		endwin();
+    	printf("ERROR; return code from pthread_create(&interactionNamedPipeThread, [...]) is %d\n", rc);
     	exit(-1);
   	}
   	//pthread_exit(NULL);
@@ -505,6 +559,7 @@ void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeNam
 
 void StartThreads(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes){
 	StartMainNamedPipeThread(threadEventsWindow, mainNamedPipeName, dbFilename, maxUsers, nrOfInteractionNamedPipes);
+	StartInteractionNamedPipeThread(threadEventsWindow, maxUsers);
 }
 
 void SignalAllLoggedInUsers(int signum, int maxUsers){
@@ -532,17 +587,15 @@ void CreateInteractionNamedPipeDir(){
 void InitInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Source: https://www.tutorialspoint.com/c_standard_library/limits_h.htm
 
-	/* VAR: name
-	 *     VAR: serverSpecificInteractionNamedPipeDirName (global var)
-	 *     tamanho do caminho (14) +
-	 *     nr máximo de digitos que um inteiro pode ter (10) +
-	 *     '/' (1) +
-	 * nr máximo de digitos que um inteiro pode ter (10) +
-	 * '\0' (1) = 36 */
+	/* VAR: name:
+	 *   GLOBAL VAR: serverSpecificInteractionNamedPipeDirName (25 -> ignorando '\0') +
+	 * 	 's' (1) +
+	 *   nr máximo de digitos que um inteiro pode ter (10) +
+	 *   '\0' (1) = 37 */
 
 	//(OLD) char name[18]; //int max value = +2147483647 (10 digitos)
 
-	char name[36];
+	char name[37];
 	
 	CreateInteractionNamedPipeDir();
 
