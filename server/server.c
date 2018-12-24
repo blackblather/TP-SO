@@ -515,15 +515,8 @@ void* InteractionNamedPipeThread(void* tArgs){
 	tIArgs = *(InteractionNamedPipeThreadArgs*) tArgs;
 	char clientNamedPipe[37];
 	int UmChar;
-	int i = 0;
 	while(1){
-		mvwprintw(tIArgs.threadEventsWindow, 8, 1, "Waiting input #%d", i);
-		wrefresh(tIArgs.threadEventsWindow);
 		InteractWithNamedPipe(O_RDONLY, "../inp/server_0/s0", &UmChar, sizeof(int));
-		mvwprintw(tIArgs.threadEventsWindow, 9, 1, "Li o char: %c", UmChar);
-		wrefresh(tIArgs.threadEventsWindow);
-		i++;
-		
 		pthread_mutex_lock(&mutex_loggedInUsers);
 		//Critical section
 		for(int i = 0; i != tIArgs.maxUsers; i++)
@@ -531,14 +524,10 @@ void* InteractionNamedPipeThread(void* tArgs){
 				sprintf(clientNamedPipe, "%sc%d", serverSpecificInteractionNamedPipeDirName, 
 												  loggedInUsers[i].clientNamedPipeIndex);
 				InteractWithNamedPipe(O_WRONLY, clientNamedPipe, &UmChar, sizeof(char));
-				//mvwprintw(tIArgs.threadEventsWindow, 9, 1+i, "%d", i);
-				//wrefresh(tIArgs.threadEventsWindow);
 			}
 		//End critical section
 		pthread_mutex_unlock(&mutex_loggedInUsers);
 	}
-	mvwprintw(tIArgs.threadEventsWindow, 10, 1, "Saiu do while");
-	wrefresh(tIArgs.threadEventsWindow);
 }
 
 void StartInteractionNamedPipeThread(WINDOW* threadEventsWindow, int maxUsers){
