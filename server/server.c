@@ -15,12 +15,12 @@
 CommonSettings commonSettings;	//Global por causa da função Shutdown(), usada ao chamar o SIGINT
 ServerSettings serverSettings;	//Global por causa da função Shutdown(), usada ao chamar o SIGINT
 Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
-Line *occupiedLine;				//Linha(s) em edição	(UNUSED NA META 1)
 MainNamedPipeThreadArgs mArgs;
 InteractionNamedPipeThreadArgs iArgs;
 ClientInfo* loggedInUsers;
 int usersCount = 0;
-pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER,
+				mutex_screen = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
 /* VAR: serverSpecificInteractionNamedPipeDirName
  * tamanho do caminho (14) +
@@ -246,7 +246,13 @@ void AllocScreenMemory(){
 	screen.line = (Line*) malloc(commonSettings.maxLines*sizeof(Line));
 	for(int i = 0; i < commonSettings.maxLines; i++){
 		screen.line[i].lineNumber = i;
-		screen.line[i].column = (char*) malloc(commonSettings.maxColumns*sizeof(char));
+
+		//maxColumns + 1 -> INCLUDES '\0'
+		screen.line[i].column = (int*) malloc((commonSettings.maxColumns+1)*sizeof(int));
+		for(int x = 0; x < commonSettings.maxColumns; x++)
+			screen.line[i].column[x] = ' ';
+		screen.line[i].column[commonSettings.maxColumns] = '\0';
+
 		screen.line[i].username = NULL;	//Limpa o lixo que vem por default quando se cria um ponteiro.
 	}
 }
@@ -332,6 +338,8 @@ void InitEmptyLoggedInUsersArray(int maxUsers){
 		loggedInUsers[i].isUsed = 0;
 		loggedInUsers[i].interactionNamedPipeIndex = -1;
 		loggedInUsers[i].clientNamedPipeIndex = -1;
+		//TODO #4 -> Adicionar maneira de guardar a "linha velha"
+		//loggedInUsers[i].oldLine =
 	}
 }
 
@@ -478,7 +486,7 @@ void* MainNamedPipeThread(void* tArgs){
 
 		/* -> FOR TEST PURPOSES ONLY <- */
 		for(int i = 0; i < 3; i++)
-			mvwprintw(tMArgs.threadEventsWindow, 5+i,1, "[%d] username: %s, PID: %d, isUsed: %d, indexINP: %d, clientNPIndex: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed, loggedInUsers[i].interactionNamedPipeIndex, loggedInUsers[i].clientNamedPipeIndex);
+			mvwprintw(tMArgs.threadEventsWindow, 4+i,1, "[%d] username: %s, PID: %d, isUsed: %d, indexINP: %d, clientNPIndex: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed, loggedInUsers[i].interactionNamedPipeIndex, loggedInUsers[i].clientNamedPipeIndex);
 		wrefresh(tMArgs.threadEventsWindow);
 		/*
 		mvwprintw(tMArgs.threadEventsWindow, 4,1, "Username: %s", username);
@@ -510,29 +518,143 @@ void StartMainNamedPipeThread(WINDOW* threadEventsWindow, char* mainNamedPipeNam
   	//pthread_exit(NULL);
 }
 
+int IsValidChar(int ch){
+	//Source: https://theasciicode.com.ar/ascii-control-characters/null-character-ascii-code-0.html
+	//Nota: Apenas são considerados válidos, os caracteres pertencentes à tabela 'ASCII printable characters'
+	if(ch >= 32 && ch <= 126)
+		return 1;
+	return 0;
+}
+
+int IsEmptyOrSpaceChar(int ch){
+	if(ch == 32 || ch == 0)
+		return 1;
+	return 0;
+}
+
+int UpdatedScreen(CharInfo* chInfo, int maxColumns, WINDOW* threadEventsWindow){
+	/* SOURCES:
+	 * Source #1: Exemplo NCURSES 1 -> Moodle
+	 * Source #2: Exemplo NCURSES 2 -> Moodle
+	 * Source #3: https://www.gnu.org/software/guile-ncurses/manual/html_node/Getting-characters-from-the-keyboard.html
+	 * Source #4: https://invisible-island.net/ncurses/man/curs_getch.3x.html#h3-Keypad-mode
+	 * Source #5: https://stackoverflow.com/questions/48274895/how-can-i-know-that-the-user-hit-the-esc-key-in-a-console-with-ncurses-linux?rq=1
+	 * Source #6: http://invisible-island.net/ncurses/man/curs_getch.3x.html#h2-NOTES
+	 * Source #7: http://pubs.opengroup.org/onlinepubs/7990989775/xcurses/inch.html
+	 */
+	/* NOTAS:
+	 *
+	 * Nota #1: 27 é o valor decimal da tabela ASCII correspondente à tecla 'Escape'.
+	 * A biblioteca NCURSES define um timeout, que é usado ao premir esta tecla, para
+	 * poder distinguir se o utilizador clicou na tecla 'Escape' ou se usou uma
+	 * Input Escape Sequence. (VER: 'Source #4' e 'Source #5')
+	 *
+	 * Nota #2: Para evitar que o delay acima mencionado aconteça, é preciso
+	 * chamar a função notimeout(win, TRUE). (VER: 'Source #5')
+	 *
+	 * Nota #3: KEY_ENTER é o enter do 'num pad', 10 é o código ascii da
+	 * tecla 'Enter' do teclado. (VER: 'Source 6')
+	 *
+	 * Nota #4: Para ir buscar o caractere numa posição (y,x), uso a função mvinch(...)
+	 * (VER: 'Source #7')
+	 *
+	 * Nota #5: No código desta função, não dou uso à função notimeout(...),
+	 * pelo que o delay referido ocorre antes do ciclo terminar. No entanto,
+	 * o delay não ocorre caso se insira uma Input Escape Sequence, que retorna como
+	 * primeiro caractere, o caractere cujo código ASCII é 27 (correspondente também
+	 * à tecla 'Escape' (VER: 'Nota #1')).
+	 *
+	 * Nota #6: Numa outra situação a tecla 'Delete', deveria apagar os caracters à direita
+	 * do cursor, mas para estar em plena conformidade com o enunciado do trabalho prático,
+	 * apaga os caracteresà esquerda.
+	 *
+	 * Nota #7: A leitura da tecla 'Escape' é desencorajada, mas utilizada nesta aplicação,
+	 * para estar de novo em conformidade com o enunciado do trabalho prático.
+	 * (VER: 'Source #6')
+	 *
+	 */
+	int lastLineChar, isValid = 0;
+	chInfo->posX = chInfo->posX-MEDIT_OFFSET;
+	if(chInfo->ch == KEY_BACKSPACE || chInfo->ch == KEY_DC){
+		if((chInfo->posX-1)>=0){
+			chInfo->posX--;
+			//screen.line[chInfo->posY].column[chInfo->posX] = ' ';
+			for(int i = chInfo->posX; i < maxColumns-1; i++)
+				screen.line[chInfo->posY].column[i] = screen.line[chInfo->posY].column[i+1];
+			screen.line[chInfo->posY].column[maxColumns-1] = ' ';
+			isValid = 1;
+		}
+	}
+	else{
+		lastLineChar = screen.line[chInfo->posY].column[maxColumns-1];
+		if(IsValidChar(chInfo->ch) && ((chInfo->posX+1) <= maxColumns) &&
+	       IsValidChar(lastLineChar) && IsEmptyOrSpaceChar(lastLineChar)){
+	       	//IS VALID CHAR
+			int auxCh, auxCh2;
+			auxCh = screen.line[chInfo->posY].column[chInfo->posX];
+			screen.line[chInfo->posY].column[chInfo->posX] = chInfo->ch;
+			for(int i = chInfo->posX+1; i < maxColumns; i++){
+				auxCh2 = screen.line[chInfo->posY].column[i]; 
+				screen.line[chInfo->posY].column[i] = auxCh;
+				auxCh = auxCh2;
+			}
+			(*chInfo).posX++;
+			isValid = 1;
+		}
+	}
+	chInfo->posX = chInfo->posX+MEDIT_OFFSET;
+	return isValid;
+}
+
+void BroadcastLine(int maxUsers, int* line, int maxColumns, CharInfo* chInfo){
+	char clientNamedPipe[37];
+	int fd;
+	pthread_mutex_lock(&mutex_loggedInUsers);
+	//Critical section
+	for(int i = 0; i != maxUsers; i++)
+		if(loggedInUsers[i].clientNamedPipeIndex != -1){
+			sprintf(clientNamedPipe, "%sc%d", serverSpecificInteractionNamedPipeDirName, 
+											  loggedInUsers[i].clientNamedPipeIndex);
+			if((fd = open(clientNamedPipe, O_WRONLY)) >= 0){
+				write(fd, chInfo, sizeof(CharInfo));
+				write(fd, line, (maxColumns+1)*sizeof(int));
+				close(fd);
+			}
+		}
+	//End critical section
+	pthread_mutex_unlock(&mutex_loggedInUsers);
+}
+
 void* InteractionNamedPipeThread(void* tArgs){
 	InteractionNamedPipeThreadArgs tIArgs;	//tIArgs = thread "Interaction" Arguments
 	tIArgs = *(InteractionNamedPipeThreadArgs*) tArgs;
-	char clientNamedPipe[37];
-	int UmChar;
+	CharInfo chInfo;
 	while(1){
-		InteractWithNamedPipe(O_RDONLY, "../inp/server_0/s0", &UmChar, sizeof(int));
-		pthread_mutex_lock(&mutex_loggedInUsers);
+		//TODO #5 -> Meter o interaction namedpipe correcto (por enquanto so funciona para o "s0")
+		InteractWithNamedPipe(O_RDONLY, "../inp/server_0/s0", &chInfo, sizeof(CharInfo));
+
+		mvwprintw(tIArgs.threadEventsWindow, 7, 1, "READ VERY GOOD: chInfo: ch -> %c, posY -> %d, posX -> %d", chInfo.ch, chInfo.posY, chInfo.posX);
+		wrefresh(tIArgs.threadEventsWindow);
+
+		pthread_mutex_lock(&mutex_screen);
 		//Critical section
-		for(int i = 0; i != tIArgs.maxUsers; i++)
-			if(loggedInUsers[i].clientNamedPipeIndex != -1){
-				sprintf(clientNamedPipe, "%sc%d", serverSpecificInteractionNamedPipeDirName, 
-												  loggedInUsers[i].clientNamedPipeIndex);
-				InteractWithNamedPipe(O_WRONLY, clientNamedPipe, &UmChar, sizeof(char));
-			}
+		if(UpdatedScreen(&chInfo, tIArgs.maxColumns, tIArgs.threadEventsWindow)){
+			for(int i = 0; i < tIArgs.maxColumns; i++)
+				mvwprintw(tIArgs.threadEventsWindow, 8, i+1, "%c", screen.line[chInfo.posY].column[i]);
+			wrefresh(tIArgs.threadEventsWindow);
+			//screen.line[chInfo.posY].column -> é o ponteiro para o primeiro char da linha
+			BroadcastLine(tIArgs.maxUsers, screen.line[chInfo.posY].column, tIArgs.maxColumns, &chInfo);
+			wrefresh(tIArgs.threadEventsWindow);
+		}
 		//End critical section
-		pthread_mutex_unlock(&mutex_loggedInUsers);
+		pthread_mutex_unlock(&mutex_screen);
 	}
 }
 
-void StartInteractionNamedPipeThread(WINDOW* threadEventsWindow, int maxUsers){
+void StartInteractionNamedPipeThread(WINDOW* threadEventsWindow, int maxUsers, int maxColumns){
 	//iArgs -> global var (para não ser criada na thread "principal")
 	iArgs.maxUsers = maxUsers;
+	iArgs.maxColumns = maxColumns;
 	iArgs.threadEventsWindow = threadEventsWindow;
 
 	pthread_t interactionNamedPipeThread;
@@ -546,9 +668,9 @@ void StartInteractionNamedPipeThread(WINDOW* threadEventsWindow, int maxUsers){
   	//pthread_exit(NULL);
 }
 
-void StartThreads(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes){
+void StartThreads(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes, int maxColumns){
 	StartMainNamedPipeThread(threadEventsWindow, mainNamedPipeName, dbFilename, maxUsers, nrOfInteractionNamedPipes);
-	StartInteractionNamedPipeThread(threadEventsWindow, maxUsers);
+	StartInteractionNamedPipeThread(threadEventsWindow, maxUsers, maxColumns);
 }
 
 void SignalAllLoggedInUsers(int signum, int maxUsers){
@@ -667,7 +789,7 @@ int main(int argc, char* const argv[]){
 		
 		InitEmptyLoggedInUsersArray(serverSettings.maxUsers);
 		InitInteractionNamedPipes(serverSettings.nrOfInteractionNamedPipes);
-		StartThreads(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers, serverSettings.nrOfInteractionNamedPipes);
+		StartThreads(window[1], commonSettings.mainNamedPipeName, serverSettings.dbFilename, serverSettings.maxUsers, serverSettings.nrOfInteractionNamedPipes, commonSettings.maxColumns);
 
 		do{
 			mvwprintw(window[3], 1, 1, "Command: ");

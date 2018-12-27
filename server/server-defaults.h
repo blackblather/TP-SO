@@ -7,13 +7,6 @@
 #define MEDIT_MAXLINES 15							//Apenas usar se a envVar nao estiver definida (same name)
 #define MEDIT_MAXCOLUMNS 45							//Apenas usar se a envVar nao estiver definida (same name)
 
-
-typedef struct LineStruct{
-	int lineNumber;		//Used to know current line (occupiedLine)
-	char *column;
-	char *username;
-} Line;
-
 typedef struct ScreenStruct{
 	Line *line;
 } Screen;
@@ -34,6 +27,6 @@ typedef struct MainNamedPipeThreadArgsStruct{
 } MainNamedPipeThreadArgs;
 
 typedef struct InteractionNamedPipeThreadArgsStruct{
-	int maxUsers;
+	int maxUsers, maxColumns;
 	WINDOW* threadEventsWindow;
 } InteractionNamedPipeThreadArgs;

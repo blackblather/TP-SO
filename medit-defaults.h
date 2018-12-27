@@ -4,16 +4,33 @@
 #define MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME "mainNamedPipeSemaphore"
 #define MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH "../inp/"				//"inp" stands for "interaction namedpipe"
 #define MEDIT_SERVER_SPECIFIC_INTERACTION_NAMED_PIPE_PATH "server_"
+#define MEDIT_OFFSET 3
+
 typedef struct CommonSettingsStruct{
 	int maxLines, maxColumns;
 	char *mainNamedPipeName;
 } CommonSettings;
+
+typedef struct LineStruct{
+	int lineNumber;		//Used to know current line (occupiedLine)
+	int *column;
+	char *username;
+} Line;
+
+
 typedef struct ClientInfoStruct{
 	char username[MEDIT_USERNAME_MAXLENGHT+1];
 	pid_t PID;
 	int isUsed, interactionNamedPipeIndex, clientNamedPipeIndex;
+	Line* oldLine;
 } ClientInfo;
+
 typedef struct interactionNamedPipeInfoStruct{
 	int INPIndex;
 	int INPServerSpecificFolderIndex;
 } interactionNamedPipeInfo;
+
+typedef struct CharInfoStruct{
+	int ch;
+	int posX, posY;
+} CharInfo;

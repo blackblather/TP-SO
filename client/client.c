@@ -24,6 +24,8 @@ char interactionNamedPipe[37];
 char clientNamedPipe[37];
 int clientNamedPipeIndex;
 ClientNamedPipeInfo rArgs;
+CharInfo chInfo;
+pthread_mutex_t mutex_chInfo = PTHREAD_MUTEX_INITIALIZER;
 
 void PrintLogo(){
 	//Source: http://patorjk.com/software/taag/#p=display&h=1&v=2&f=Ogre&t=Medit%20Client%20
@@ -77,20 +79,6 @@ void InteractWithNamedPipe(int action, char* mainNamedPipeName, void* val, int s
 		sem_post(interprocMutex);
 	}
 }*/
-
-int IsValidChar(int ch){
-	//Source: https://theasciicode.com.ar/ascii-control-characters/null-character-ascii-code-0.html
-	//Nota: Apenas são considerados válidos, os caracteres pertencentes à tabela 'ASCII printable characters'
-	if(ch >= 32 && ch <= 126)
-		return 1;
-	return 0;
-}
-
-int IsEmptyOrSpaceChar(int ch){
-	if(ch == 32 || ch == 0)
-		return 1;
-	return 0;
-}
 
 void SetInteractionNamedPipePath(){
 	sprintf(interactionNamedPipe, "%s%s%d/s%d", MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH, 
@@ -170,16 +158,18 @@ void PrintLineNrs(int maxLinesTMP){
 		mvprintw(i, 0, "%2d:", i);
 }
 
-void EnterLineEditMode(int posY, int maxColumns, int offset, char* mainNamedPipeName){
-	//Source #1: Exemplo NCURSES 1 -> Moodle
-	//Source #2: Exemplo NCURSES 2 -> Moodle
-	//Source #3: https://www.gnu.org/software/guile-ncurses/manual/html_node/Getting-characters-from-the-keyboard.html
-	//Source #4: https://invisible-island.net/ncurses/man/curs_getch.3x.html#h3-Keypad-mode
-	//Source #5: https://stackoverflow.com/questions/48274895/how-can-i-know-that-the-user-hit-the-esc-key-in-a-console-with-ncurses-linux?rq=1
-	//Source #6: http://invisible-island.net/ncurses/man/curs_getch.3x.html#h2-NOTES
-	//Source #7: http://pubs.opengroup.org/onlinepubs/7990989775/xcurses/inch.html
-	/* 
-	 * NOTAS:
+void EnterLineEditMode(int posY, int maxColumns, char* mainNamedPipeName){
+	/* SOURCES:
+	 * Source #1: Exemplo NCURSES 1 -> Moodle
+	 * Source #2: Exemplo NCURSES 2 -> Moodle
+	 * Source #3: https://www.gnu.org/software/guile-ncurses/manual/html_node/Getting-characters-from-the-keyboard.html
+	 * Source #4: https://invisible-island.net/ncurses/man/curs_getch.3x.html#h3-Keypad-mode
+	 * Source #5: https://stackoverflow.com/questions/48274895/how-can-i-know-that-the-user-hit-the-esc-key-in-a-console-with-ncurses-linux?rq=1
+	 * Source #6: http://invisible-island.net/ncurses/man/curs_getch.3x.html#h2-NOTES
+	 * Source #7: http://pubs.opengroup.org/onlinepubs/7990989775/xcurses/inch.html
+	 */
+	/* NOTAS:
+	 *
 	 * Nota #1: 27 é o valor decimal da tabela ASCII correspondente à tecla 'Escape'.
 	 * A biblioteca NCURSES define um timeout, que é usado ao premir esta tecla, para
 	 * poder distinguir se o utilizador clicou na tecla 'Escape' ou se usou uma
@@ -210,83 +200,96 @@ void EnterLineEditMode(int posY, int maxColumns, int offset, char* mainNamedPipe
 	 *
 	 */
 
-	int posX = offset;
-	int ch, lastLineChar;
-	maxColumns = maxColumns+offset;
+	chInfo.posX = MEDIT_OFFSET;
+	chInfo.posY = posY;
+	int lastLineChar, ch;
 
 	cbreak();
 	keypad(stdscr, TRUE);
 	noecho();
 
 	//Posiciona o cursor no inicio da linha
-	move(posY, posX);
+	move(chInfo.posY, chInfo.posX);
 	refresh();
-	int i = 0;
 	do{
 		ch = getch();
-		switch(ch){
-			case KEY_LEFT:{
-				if((posX-1)>=offset)
-					posX--;
-			}break;
-			case KEY_RIGHT:{
-				if((posX+1)<=maxColumns)
-					posX++;
-			}break;
-			default:{
-				if(ch == KEY_BACKSPACE || ch == KEY_DC){
-					if((posX-1)>=offset){
-						posX--;
-						mvprintw(posY, posX, "%c", ' ');
-						for(int i = posX; i < maxColumns-1; i++)
-							mvprintw(posY, i, "%c", mvinch(posY, i+1));
-						mvprintw(posY, maxColumns-1, "%c", ' ');
+		pthread_mutex_lock(&mutex_chInfo);
+		//Critical section
+			switch(ch){
+				case KEY_LEFT:{
+					if((chInfo.posX-1)>=MEDIT_OFFSET){
+						chInfo.posX--;
+						move(chInfo.posY, chInfo.posX);
+						refresh();
 					}
-				}
-				else{
-					lastLineChar = (int) mvinch(posY, maxColumns-1);
-					if(IsValidChar(ch) && ((posX+1) <= maxColumns) &&
-				       IsValidChar(lastLineChar) && IsEmptyOrSpaceChar(lastLineChar)){
-				       	//IS VALID CHAR
-						int auxCh, auxCh2;
-						auxCh = mvinch(posY, posX);
-						mvprintw(posY, posX, "%c", ch);
-						for(int i = posX+1; i < maxColumns; i++){
-							auxCh2 = mvinch(posY, i); 
-							mvprintw(posY, i, "%c", auxCh);
-							auxCh = auxCh2;
-						}
-						posX++;
-						//TESTING WRITING CHARS TO ALL CLIENTS
-							sem_wait(interprocMutex);
-							InteractWithNamedPipe(O_WRONLY, interactionNamedPipe, &ch, sizeof(int));
-							sem_post(interprocMutex);
-						//END TEST
+				}break;
+				case KEY_RIGHT:{
+					if((chInfo.posX+1)<=maxColumns+MEDIT_OFFSET){
+						chInfo.posX++;
+						move(chInfo.posY, chInfo.posX);
+						refresh();
 					}
-				}
-			}break;
-		}	
+				}break;
+				default:{
+					sem_wait(interprocMutex);
+					chInfo.ch = ch;
+					InteractWithNamedPipe(O_WRONLY, interactionNamedPipe, &chInfo, sizeof(CharInfo));
+					sem_post(interprocMutex);
+				}break;
+			}
+		//End critical section
+		pthread_mutex_unlock(&mutex_chInfo);
+	}while(chInfo.ch != 27);
+}
+
+void WaitAndReadCharInfoAndLine(char* clientNamedPipe, int maxColumns, int* line){
+	int fd;
+	CharInfo chInfoFIFO;
+	if((fd = open(clientNamedPipe, O_RDONLY)) >= 0){
+			read(fd, &chInfoFIFO, sizeof(CharInfo));
+			pthread_mutex_lock(&mutex_chInfo);
+			if(chInfo.posY == chInfoFIFO.posY)
+				chInfo.posX = chInfoFIFO.posX;
+
+			/*mvprintw(10, 3, "chInfo.posY = %d, chInfo.posX = %d, chInfo.ch = %c", chInfo.posY, chInfo.posX, chInfo.ch);
+			mvprintw(11, 3, "(maxColumns+1) = %d", (maxColumns+1));
+			refresh();*/
+			pthread_mutex_unlock(&mutex_chInfo);
+			read(fd, line, (maxColumns+1)*sizeof(int));
+			close(fd);
+		}
+}
+
+void PrintLine(int* line, int maxColumns){
+	for(int i = 0; i < maxColumns; i++)
+		mvprintw(0, i+MEDIT_OFFSET, "%c", line[i]);
+}
+
+void UpdateCursorPositionFromServerResponse(int posY, int posX){
+	pthread_mutex_lock(&mutex_chInfo);
 		move(posY, posX);
 		refresh();
-		i++;
-	}while(ch != 27);
+	pthread_mutex_unlock(&mutex_chInfo);
 }
 
 void* ReadingThread(void* tArgs){
 	ClientNamedPipeInfo tRArgs;	//tRArgs = thread "Reading" Arguments
 	tRArgs = *(ClientNamedPipeInfo*) tArgs;
-	char inputChar;
+	int posY, posX;
+	int* line = (int*) malloc((tRArgs.maxColumns+1)*sizeof(int));
 	while(1){
-		InteractWithNamedPipe(O_RDONLY, tRArgs.clientNamedPipe, &inputChar, sizeof(char));
-		mvprintw(14,13, "%c", inputChar);
-		refresh();
+		//mvprintw(11, 3, "(tRArgs.maxColumns+1) = %d", (tRArgs.maxColumns+1));
+		//refresh();
+		WaitAndReadCharInfoAndLine(tRArgs.clientNamedPipe, tRArgs.maxColumns, line);
+		PrintLine(line, tRArgs.maxColumns);
+		UpdateCursorPositionFromServerResponse(chInfo.posY, chInfo.posX);
 	}
 }
 
-void StartReadingThread(){
+void StartReadingThread(int maxColumns){
 	//rArgs -> global var (para não ser criada na thread "principal")
 	rArgs.clientNamedPipe = clientNamedPipe;
-
+	rArgs.maxColumns = maxColumns;
 	pthread_t readingThread;
 
 	int rc = pthread_create(&readingThread, NULL, ReadingThread, (void *)&rArgs);
@@ -300,7 +303,7 @@ void StartReadingThread(){
 void InitTextEditor(char *username, CommonSettings commonSettings){
 	//Quando chega aqui, o utilizador já fez login
 	PrintLineNrs(commonSettings.maxLines);
-	StartReadingThread();
+	StartReadingThread(commonSettings.maxColumns);
 	/* TODO LIST:
 	 * (1) -> recebe estrutura de como estão as coisas neste momento e imprime estrutura (tudo tem que bloquear até
 	 * ter carregado as coisas todas, para nao haver conflitos)
@@ -311,7 +314,7 @@ void InitTextEditor(char *username, CommonSettings commonSettings){
 	 * (3) -> entra em modo de "navegação livre"
 	 *******************************************/
 	//quando o user clica "Enter", se a linha estiver livre, entra no modo de edição dessa linha
-	EnterLineEditMode(0, commonSettings.maxColumns, 3, commonSettings.mainNamedPipeName);
+	EnterLineEditMode(0, commonSettings.maxColumns, commonSettings.mainNamedPipeName);
 }
 
 void InitCommonSettingsStruct(CommonSettings* commonSettings){
