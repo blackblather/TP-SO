@@ -11,13 +11,6 @@ typedef struct CommonSettingsStruct{
 	char *mainNamedPipeName;
 } CommonSettings;
 
-typedef struct LineStruct{
-	int lineNumber;		//Used to know current line (occupiedLine)
-	int *column;
-	char *username;
-} Line;
-
-
 typedef struct ClientInfoStruct{
 	char username[MEDIT_USERNAME_MAXLENGHT+1];
 	pid_t PID;

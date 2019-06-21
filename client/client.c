@@ -11,7 +11,7 @@
 #include <signal.h>		//Used for signal
 #include "client-defaults.h"
 
-sem_t* interprocMutex;
+sem_t* mainNamedPipeSem;
 interactionNamedPipeInfo respServ;
 char interactionNamedPipe[37];
 /* VAR: clientNamedPipe:
@@ -24,7 +24,7 @@ char interactionNamedPipe[37];
 char clientNamedPipe[37];
 int clientNamedPipeIndex;
 ClientNamedPipeInfo rArgs;
-CharInfo chInfo;
+CharInfo chInfo, chInfoFIFO;
 pthread_mutex_t mutex_chInfo = PTHREAD_MUTEX_INITIALIZER;
 
 void PrintLogo(){
@@ -103,22 +103,22 @@ int CantLogin(char* mainNamedPipeName, ClientInfo* clientInfo){
 	//int respServ = -1;
 	respServ.INPIndex = -1;
 	//WriteReadNamedpipe(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL, mainNamedPipeName, clientInfo, sizeof((*clientInfo)), &respServ, sizeof(interactionNamedPipeInfo));
-	interprocMutex = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL);
-	sem_wait(interprocMutex);
+	mainNamedPipeSem = sem_open(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME, O_EXCL);
+	sem_wait(mainNamedPipeSem);
 		//Critical section
-		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, clientInfo, sizeof((*clientInfo)));
+		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, clientInfo, sizeof(ClientInfo));
 		InteractWithNamedPipe(O_RDONLY, mainNamedPipeName, &respServ, sizeof(interactionNamedPipeInfo));
 		SetInteractionNamedPipePath();
 
 	if(respServ.INPIndex == -1){
 		//End critical section (fail login case)
-		sem_post(interprocMutex);
+		sem_post(mainNamedPipeSem);
 		return 1;
 	} else {
 		InitClientNamedPipe();
 		InteractWithNamedPipe(O_WRONLY, mainNamedPipeName, &clientNamedPipeIndex, sizeof(int));
 		//End critical section (successful login case)
-		sem_post(interprocMutex);
+		sem_post(mainNamedPipeSem);
 		return 0;
 	}
 }
@@ -156,6 +156,12 @@ void InitFromOpts(int argc, char* const argv[], char *username, char **mainNamed
 void PrintLineNrs(int maxLinesTMP){
 	for(int i = 0; i < maxLinesTMP; i++)
 		mvprintw(i, 0, "%2d:", i);
+}
+
+
+void UpdateCursorPosition(int posY, int posX){
+	move(posY, posX);
+	refresh();
 }
 
 void EnterLineEditMode(int posY, int maxColumns, char* mainNamedPipeName){
@@ -203,14 +209,12 @@ void EnterLineEditMode(int posY, int maxColumns, char* mainNamedPipeName){
 	chInfo.posX = MEDIT_OFFSET;
 	chInfo.posY = posY;
 	int lastLineChar, ch;
-
-	cbreak();
+	/*cbreak();
 	keypad(stdscr, TRUE);
-	noecho();
+	noecho();*/
 
 	//Posiciona o cursor no inicio da linha
-	move(chInfo.posY, chInfo.posX);
-	refresh();
+	UpdateCursorPosition(chInfo.posY, chInfo.posX);
 	do{
 		ch = getch();
 		pthread_mutex_lock(&mutex_chInfo);
@@ -219,22 +223,18 @@ void EnterLineEditMode(int posY, int maxColumns, char* mainNamedPipeName){
 				case KEY_LEFT:{
 					if((chInfo.posX-1)>=MEDIT_OFFSET){
 						chInfo.posX--;
-						move(chInfo.posY, chInfo.posX);
-						refresh();
+						UpdateCursorPosition(chInfo.posY, chInfo.posX);
 					}
 				}break;
 				case KEY_RIGHT:{
 					if((chInfo.posX+1)<=maxColumns+MEDIT_OFFSET){
 						chInfo.posX++;
-						move(chInfo.posY, chInfo.posX);
-						refresh();
+						UpdateCursorPosition(chInfo.posY, chInfo.posX);
 					}
 				}break;
 				default:{
-					sem_wait(interprocMutex);
 					chInfo.ch = ch;
 					InteractWithNamedPipe(O_WRONLY, interactionNamedPipe, &chInfo, sizeof(CharInfo));
-					sem_post(interprocMutex);
 				}break;
 			}
 		//End critical section
@@ -244,32 +244,17 @@ void EnterLineEditMode(int posY, int maxColumns, char* mainNamedPipeName){
 
 void WaitAndReadCharInfoAndLine(char* clientNamedPipe, int maxColumns, int* line){
 	int fd;
-	CharInfo chInfoFIFO;
+	
 	if((fd = open(clientNamedPipe, O_RDONLY)) >= 0){
-			read(fd, &chInfoFIFO, sizeof(CharInfo));
-			pthread_mutex_lock(&mutex_chInfo);
-			if(chInfo.posY == chInfoFIFO.posY)
-				chInfo.posX = chInfoFIFO.posX;
-
-			/*mvprintw(10, 3, "chInfo.posY = %d, chInfo.posX = %d, chInfo.ch = %c", chInfo.posY, chInfo.posX, chInfo.ch);
-			mvprintw(11, 3, "(maxColumns+1) = %d", (maxColumns+1));
-			refresh();*/
-			pthread_mutex_unlock(&mutex_chInfo);
-			read(fd, line, (maxColumns+1)*sizeof(int));
-			close(fd);
-		}
+		read(fd, &chInfoFIFO, sizeof(CharInfo));
+		read(fd, line, (maxColumns+1)*sizeof(int));
+		close(fd);
+	}
 }
 
-void PrintLine(int* line, int maxColumns){
+void PrintLine(int posY, int* line, int maxColumns){
 	for(int i = 0; i < maxColumns; i++)
-		mvprintw(0, i+MEDIT_OFFSET, "%c", line[i]);
-}
-
-void UpdateCursorPositionFromServerResponse(int posY, int posX){
-	pthread_mutex_lock(&mutex_chInfo);
-		move(posY, posX);
-		refresh();
-	pthread_mutex_unlock(&mutex_chInfo);
+		mvprintw(posY, i+MEDIT_OFFSET, "%c", line[i]);
 }
 
 void* ReadingThread(void* tArgs){
@@ -278,11 +263,13 @@ void* ReadingThread(void* tArgs){
 	int posY, posX;
 	int* line = (int*) malloc((tRArgs.maxColumns+1)*sizeof(int));
 	while(1){
-		//mvprintw(11, 3, "(tRArgs.maxColumns+1) = %d", (tRArgs.maxColumns+1));
-		//refresh();
 		WaitAndReadCharInfoAndLine(tRArgs.clientNamedPipe, tRArgs.maxColumns, line);
-		PrintLine(line, tRArgs.maxColumns);
-		UpdateCursorPositionFromServerResponse(chInfo.posY, chInfo.posX);
+		pthread_mutex_lock(&mutex_chInfo);
+			PrintLine(chInfoFIFO.posY, line, tRArgs.maxColumns);
+			if(chInfo.posY == chInfoFIFO.posY)
+				chInfo.posX = chInfoFIFO.posX;
+			UpdateCursorPosition(chInfo.posY, chInfo.posX);
+		pthread_mutex_unlock(&mutex_chInfo);
 	}
 }
 
@@ -294,9 +281,11 @@ void StartReadingThread(int maxColumns){
 
 	int rc = pthread_create(&readingThread, NULL, ReadingThread, (void *)&rArgs);
   	if (rc){
-  		endwin();
-    	printf("ERROR; return code from pthread_create(&interactionNamedPipeThread, [...]) is %d\n", rc);
-    	exit(-1);
+  		//endwin();
+    	mvprintw(5,5,"ERROR; return code from pthread_create(&interactionNamedPipeThread, [...]) is %d\n", rc);
+    	refresh();
+    	getch();
+    	//exit(-1);
   	}
 }
 
@@ -308,13 +297,55 @@ void InitTextEditor(char *username, CommonSettings commonSettings){
 	 * (1) -> recebe estrutura de como estão as coisas neste momento e imprime estrutura (tudo tem que bloquear até
 	 * ter carregado as coisas todas, para nao haver conflitos)
 	 *
-	 * (2) -> inicia thread de receber chars do servidor (podia implementar uma espécie de pilha FILO (lista ligada com
-	 * ponteiro para a ultima posição, e cada item aponta para a anterior) que armazena tudo o que é Chars a imprimir)1
-	 *
-	 * (3) -> entra em modo de "navegação livre"
+	 * (2) -> entra em modo de "navegação livre"
 	 *******************************************/
+
+	int ch, posYAux;
+
+	cbreak();
+	keypad(stdscr, TRUE);
+	noecho();
+
+	pthread_mutex_lock(&mutex_chInfo);
+		chInfo.posX = MEDIT_OFFSET;
+		chInfo.posY = 0;
+		move(chInfo.posY, chInfo.posX);
+		refresh();
+	pthread_mutex_unlock(&mutex_chInfo);
+
+	do{
+		ch = getch();
+		if(ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_DOWN || ch == KEY_UP){
+			pthread_mutex_lock(&mutex_chInfo);
+				switch(ch){
+					case KEY_LEFT: {
+						if((chInfo.posX-1) >= MEDIT_OFFSET)
+							chInfo.posX--;
+					} break;
+					case KEY_RIGHT: {
+						if((chInfo.posX+1) <= commonSettings.maxColumns+MEDIT_OFFSET)
+							chInfo.posX++;
+					} break;
+					case KEY_DOWN: {
+						if((chInfo.posY+1) <= commonSettings.maxLines-1)
+							chInfo.posY++;
+					} break;
+					case KEY_UP: {
+						if((chInfo.posY-1) >= 0)
+							chInfo.posY--;
+					} break;
+				}
+				UpdateCursorPosition(chInfo.posY, chInfo.posX);
+			pthread_mutex_unlock(&mutex_chInfo);
+		} else if(ch == 10) {
+			//Source #1: https://stackoverflow.com/questions/11067800/ncurses-key-enter-is-fail
+			pthread_mutex_lock(&mutex_chInfo);
+				posYAux = chInfo.posY;
+			pthread_mutex_unlock(&mutex_chInfo);
+			EnterLineEditMode(posYAux, commonSettings.maxColumns, commonSettings.mainNamedPipeName);
+		}
+	}while(ch != 27);
 	//quando o user clica "Enter", se a linha estiver livre, entra no modo de edição dessa linha
-	EnterLineEditMode(0, commonSettings.maxColumns, commonSettings.mainNamedPipeName);
 }
 
 void InitCommonSettingsStruct(CommonSettings* commonSettings){

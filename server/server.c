@@ -18,9 +18,10 @@ Screen screen;					//Exemplo de utilização: screen.line[0].column[0] = 'F';
 MainNamedPipeThreadArgs mArgs;
 InteractionNamedPipeThreadArgs iArgs;
 ClientInfo* loggedInUsers;
-int usersCount = 0;
+int usersCount = 0, InteractionNamedPipeThreadIndex = 0;
 pthread_mutex_t mutex_loggedInUsers = PTHREAD_MUTEX_INITIALIZER,
-				mutex_screen = PTHREAD_MUTEX_INITIALIZER;
+				mutex_screen = PTHREAD_MUTEX_INITIALIZER,
+				mutex_INPTIndex = PTHREAD_MUTEX_INITIALIZER;
 sem_t* interprocMutex;
 /* VAR: serverSpecificInteractionNamedPipeDirName
  * tamanho do caminho (14) +
@@ -473,7 +474,7 @@ void* MainNamedPipeThread(void* tArgs){
 	while(1){
 		respServ.INPIndex = -1;
 
-		InteractWithNamedPipe(O_RDONLY, tMArgs.mainNamedPipeName, &newClientInfo, sizeof(newClientInfo));
+		InteractWithNamedPipe(O_RDONLY, tMArgs.mainNamedPipeName, &newClientInfo, sizeof(ClientInfo));
 
 		userPos = ValidateClientInfo(newClientInfo, tMArgs.nrOfInteractionNamedPipes, tMArgs.maxUsers, tMArgs.dbFilename);
 
@@ -485,8 +486,10 @@ void* MainNamedPipeThread(void* tArgs){
 		}
 
 		/* -> FOR TEST PURPOSES ONLY <- */
+		pthread_mutex_lock(&mutex_loggedInUsers);
 		for(int i = 0; i < 3; i++)
 			mvwprintw(tMArgs.threadEventsWindow, 4+i,1, "[%d] username: %s, PID: %d, isUsed: %d, indexINP: %d, clientNPIndex: %d", i, loggedInUsers[i].username, loggedInUsers[i].PID, loggedInUsers[i].isUsed, loggedInUsers[i].interactionNamedPipeIndex, loggedInUsers[i].clientNamedPipeIndex);
+		pthread_mutex_unlock(&mutex_loggedInUsers);
 		wrefresh(tMArgs.threadEventsWindow);
 		/*
 		mvwprintw(tMArgs.threadEventsWindow, 4,1, "Username: %s", username);
@@ -575,6 +578,7 @@ int UpdatedScreen(CharInfo* chInfo, int maxColumns, WINDOW* threadEventsWindow){
 	 */
 	int lastLineChar, isValid = 0;
 	chInfo->posX = chInfo->posX-MEDIT_OFFSET;
+
 	if(chInfo->ch == KEY_BACKSPACE || chInfo->ch == KEY_DC){
 		if((chInfo->posX-1)>=0){
 			chInfo->posX--;
@@ -602,6 +606,7 @@ int UpdatedScreen(CharInfo* chInfo, int maxColumns, WINDOW* threadEventsWindow){
 			isValid = 1;
 		}
 	}
+
 	chInfo->posX = chInfo->posX+MEDIT_OFFSET;
 	return isValid;
 }
@@ -613,6 +618,7 @@ void BroadcastLine(int maxUsers, int* line, int maxColumns, CharInfo* chInfo){
 	//Critical section
 	for(int i = 0; i != maxUsers; i++)
 		if(loggedInUsers[i].clientNamedPipeIndex != -1){
+			//TODO: add mutex for -> "serverSpecificInteractionNamedPipeDirName"
 			sprintf(clientNamedPipe, "%sc%d", serverSpecificInteractionNamedPipeDirName, 
 											  loggedInUsers[i].clientNamedPipeIndex);
 			if((fd = open(clientNamedPipe, O_WRONLY)) >= 0){
@@ -629,9 +635,13 @@ void* InteractionNamedPipeThread(void* tArgs){
 	InteractionNamedPipeThreadArgs tIArgs;	//tIArgs = thread "Interaction" Arguments
 	tIArgs = *(InteractionNamedPipeThreadArgs*) tArgs;
 	CharInfo chInfo;
+	pthread_mutex_lock(&mutex_INPTIndex);
+	int INPTIndex = InteractionNamedPipeThreadIndex++;
+	pthread_mutex_unlock(&mutex_INPTIndex);
+
 	while(1){
 		//TODO #5 -> Meter o interaction namedpipe correcto (por enquanto so funciona para o "s0")
-		InteractWithNamedPipe(O_RDONLY, "../inp/server_0/s0", &chInfo, sizeof(CharInfo));
+		InteractWithNamedPipe(O_RDONLY, tIArgs.interactionNamedPipeName[INPTIndex], &chInfo, sizeof(CharInfo));
 
 		mvwprintw(tIArgs.threadEventsWindow, 7, 1, "READ VERY GOOD: chInfo: ch -> %c, posY -> %d, posX -> %d", chInfo.ch, chInfo.posY, chInfo.posX);
 		wrefresh(tIArgs.threadEventsWindow);
@@ -651,32 +661,39 @@ void* InteractionNamedPipeThread(void* tArgs){
 	}
 }
 
-void StartInteractionNamedPipeThread(WINDOW* threadEventsWindow, int maxUsers, int maxColumns){
+void StartInteractionNamedPipeThread(WINDOW* threadEventsWindow, int maxUsers, int maxColumns, int nrOfInteractionNamedPipes){
 	//iArgs -> global var (para não ser criada na thread "principal")
 	iArgs.maxUsers = maxUsers;
 	iArgs.maxColumns = maxColumns;
 	iArgs.threadEventsWindow = threadEventsWindow;
+	iArgs.interactionNamedPipeName = (char**) malloc(nrOfInteractionNamedPipes*sizeof(char*));
 
-	pthread_t interactionNamedPipeThread;
-
-	int rc = pthread_create(&interactionNamedPipeThread, NULL, InteractionNamedPipeThread, (void *)&iArgs);
-  	if (rc){
-  		endwin();
-    	printf("ERROR; return code from pthread_create(&interactionNamedPipeThread, [...]) is %d\n", rc);
-    	exit(-1);
-  	}
+	pthread_t* interactionNamedPipeThread = (pthread_t*) malloc(nrOfInteractionNamedPipes*sizeof(pthread_t));
+	int rc;
+	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
+		iArgs.interactionNamedPipeName[i] = (char*) malloc(37*sizeof(int));
+		sprintf(iArgs.interactionNamedPipeName[i], "%ss%d", serverSpecificInteractionNamedPipeDirName, i);
+		rc = pthread_create(&interactionNamedPipeThread[i], NULL, InteractionNamedPipeThread, (void *)&iArgs);
+	  	if (rc){
+	  		endwin();
+	    	printf("ERROR; return code from pthread_create(&interactionNamedPipeThread, [...]) is %d\n", rc);
+	    	exit(-1);
+	  	}
+	  }
   	//pthread_exit(NULL);
 }
 
 void StartThreads(WINDOW* threadEventsWindow, char* mainNamedPipeName, char* dbFilename, int maxUsers, int nrOfInteractionNamedPipes, int maxColumns){
 	StartMainNamedPipeThread(threadEventsWindow, mainNamedPipeName, dbFilename, maxUsers, nrOfInteractionNamedPipes);
-	StartInteractionNamedPipeThread(threadEventsWindow, maxUsers, maxColumns);
+	StartInteractionNamedPipeThread(threadEventsWindow, maxUsers, maxColumns, nrOfInteractionNamedPipes);
 }
 
 void SignalAllLoggedInUsers(int signum, int maxUsers){
+	pthread_mutex_lock(&mutex_loggedInUsers);
 	for(int i = 0; i < maxUsers; i++)
 		if(loggedInUsers[i].username[0] != 0 || loggedInUsers[i].isUsed == 1)
 			kill(loggedInUsers[i].PID, signum);
+	pthread_mutex_unlock(&mutex_loggedInUsers);
 }
 
 void CreateInteractionNamedPipeDir(){
@@ -734,16 +751,26 @@ void FreeAllocatedMemory(Screen *screen, CommonSettings commonSettings){
 
 void DeleteInteractionNamedPipes(int nrOfInteractionNamedPipes){
 	//Ver comment em InitInteractionNamedPipes(...)
-	char name[36];
+	char name[37];
 	for(int i = 0; i < nrOfInteractionNamedPipes; i++){
 		memset(name, 0, sizeof(name));
 		sprintf(name, "%ss%d", serverSpecificInteractionNamedPipeDirName, i);
 		unlink(name);
 	}
-	//remove server specific "../inp/server_x" folder
-	rmdir(serverSpecificInteractionNamedPipeDirName);
-	//if "../inp/" is empty, delete it (only deletes it after the last server shutsdown)
-	rmdir(MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH);
+	
+}
+
+void DeleteClientNamedPipes(int maxUsers){
+	char name[37];
+	pthread_mutex_lock(&mutex_loggedInUsers);
+	for(int i = 0; i < maxUsers; i++){
+		if(loggedInUsers[i].isUsed == 1){
+			memset(name, 0, sizeof(name));
+			sprintf(name, "%sc%d", serverSpecificInteractionNamedPipeDirName, loggedInUsers[i].clientNamedPipeIndex);
+			unlink(name);
+		}
+	}
+	pthread_mutex_unlock(&mutex_loggedInUsers);
 }
 
 void Shutdown(){
@@ -753,6 +780,11 @@ void Shutdown(){
 	SignalAllLoggedInUsers(SIGUSR1, serverSettings.maxUsers);
 	sem_unlink(MEDIT_MAIN_NAMED_PIPE_SEMAPHORE_NAME);
 	DeleteInteractionNamedPipes(serverSettings.nrOfInteractionNamedPipes);
+	DeleteClientNamedPipes(serverSettings.maxUsers);
+	//remove server specific "../inp/server_x" folder
+	rmdir(serverSpecificInteractionNamedPipeDirName);
+	//if "../inp/" is empty, delete it (only deletes it after the last server shutsdown)
+	rmdir(MEDIT_MAIN_INTERACTION_NAMED_PIPE_PATH);
 	exit(1);
 }
 
